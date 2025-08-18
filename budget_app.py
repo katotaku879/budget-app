@@ -963,6 +963,7 @@ class IncomeExpenseWidget(BaseWidget):
         self.expense_table.setColumnHidden(0, True)
         self.expense_table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.expense_table.setEditTriggers(QTableWidget.DoubleClicked | QTableWidget.EditKeyPressed)
+        self.expense_table.setSelectionBehavior(QTableWidget.SelectRows)
         
         # 削除ボタン
         self.delete_button = QPushButton('選択した行を削除')
@@ -1259,10 +1260,10 @@ class IncomeExpenseWidget(BaseWidget):
                 
                 self.expense_table.setCellWidget(row_idx, 2, category_combo)
                 
-                self.expense_table.setItem(
-                    row_idx, 3, 
-                    EditableTableItem(f"{row['amount']:,.0f}")
-                )
+                amount_item = EditableTableItem(f"{row['amount']:,.0f}")
+                amount_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)  # 右寄せ
+                self.expense_table.setItem(row_idx, 3, amount_item)
+                
                 self.expense_table.setItem(
                     row_idx, 4, 
                     EditableTableItem(str(row['description']))
@@ -1303,49 +1304,54 @@ class IncomeExpenseWidget(BaseWidget):
                 expense_id = int(self.expense_table.item(row, 0).text())
                 date = self.expense_table.item(row, 1).text()
                 
-                # カテゴリの処理（カラムインデックス2の場合）
-                if column == 2:
-                    category = item.text()
-                    # カテゴリが有効かチェック
-                    categories = item.data(Qt.UserRole)
-                    if categories and category not in categories:
-                        # 有効なカテゴリでない場合、エラーメッセージと選択肢を表示
-                        category, ok = QInputDialog.getItem(
-                            self, '有効なカテゴリを選択', 
-                            '入力されたカテゴリは無効です。\n有効なカテゴリを選択してください:',
-                            categories, 0, False
-                        )
-                        if not ok:
-                            self.update_table()  # キャンセルされた場合は表を更新して元に戻す
-                            return
-                        # 選択されたカテゴリでセルを更新
-                        item.setText(category)
+                # カテゴリの処理（コンボボックスかテキストか判定）
+                category_widget = self.expense_table.cellWidget(row, 2)
+                if category_widget and isinstance(category_widget, QComboBox):
+                    category = category_widget.currentText()
                 else:
-                    category = self.expense_table.item(row, 2).text()
+                    category_item = self.expense_table.item(row, 2)
+                    category = category_item.text() if category_item else ''
                 
-                # 金額処理を改善
+                # 金額の処理を改善
                 amount_text = self.expense_table.item(row, 3).text()
-                # カンマ、空白、円記号を削除
-                amount_text = amount_text.replace(',', '').replace(' ', '').replace('円', '')
+                # カンマ、空白、円記号、マイナス記号を処理
+                amount_text = amount_text.replace(',', '').replace(' ', '').replace('円', '').replace('−', '-').replace('－', '-')
+                
+                # 空文字列チェック
+                if not amount_text.strip():
+                    raise ValueError("金額が入力されていません")
+                
                 amount = float(amount_text)
+                
+                # 金額が負数でない場合は絶対値を使用（支出として記録）
+                if amount < 0:
+                    amount = abs(amount)
                 
                 description = self.expense_table.item(row, 4).text()
                 
-                # データベース更新
+                # データベース更新（共通関数を使用）
                 execute_query('''
                     UPDATE expenses 
                     SET date = ?, category = ?, amount = ?, description = ?
                     WHERE id = ?
                 ''', (date, category, amount, description, expense_id))
                 
-                # 表示を更新（編集中の場合を除く）
-                if column != 2:  # カテゴリ編集時は更新しない（ダブルクリックでの編集をサポート）
-                    self.update_table()
-                self.update_monthly_expense()
+                print(f"データ更新成功: ID={expense_id}, 金額={amount}")  # デバッグ用
                 
+                # 表示を更新（金額編集時は少し待つ）
+                if column == 3:  # 金額列の場合
+                    QApplication.processEvents()  # UI更新を待つ
+                
+                self.update_monthly_expense()
+                self.update_goal_progress()  # 目標進捗も更新
+                
+            except ValueError as e:
+                print(f"値エラー: {e}")
+                QMessageBox.warning(self, '警告', f'入力値が正しくありません: {str(e)}\n数値を正しく入力してください。')
+                self.update_table()
             except Exception as e:
-                print(f"エラー発生: {e}")  # コンソールにエラーを表示（デバッグ用）
-                QMessageBox.warning(self, '警告', '入力値が正しくありません。\n変更は保存されませんでした。')
+                print(f"予期しないエラー: {e}")
+                QMessageBox.warning(self, '警告', '変更の保存中にエラーが発生しました。')
                 self.update_table()
 
     def delete_selected_rows(self):
