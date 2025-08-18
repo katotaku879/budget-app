@@ -1,0 +1,31 @@
+# 最重要: 個人データを含むファイルを除外 
+budget.db 
+*.db 
+*.sqlite 
+*.sqlite3 
+backups/ 
+ 
+# Python関連 
+__pycache__/ 
+*.py[cod] 
+*.pyc 
+*.pyo 
+ 
+# 環境関連 
+.env 
+venv/ 
+env/ 
+ 
+# IDE 
+.vscode/ 
+.idea/ 
+ 
+# OS 
+.DS_Store 
+Thumbs.db 
+ 
+# ログ・一時ファイル 
+*.log 
+*.tmp 
+*.temp 
+*.bak 
