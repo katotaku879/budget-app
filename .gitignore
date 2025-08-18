@@ -29,3 +29,4 @@ Thumbs.db
 *.tmp 
 *.temp 
 *.bak 
+*.json 
