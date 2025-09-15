@@ -858,6 +858,7 @@ class IncomeExpenseWidget(BaseWidget):
         super().__init__(parent)  # BaseWidget の初期化
         self.current_year, self.current_month = DateHelper.get_current_year_month()
         self.initUI()
+        self.load_monthly_income()      # ←この行を追加
         self.update_monthly_expense()
         self.process_recurring_expenses()
 
@@ -990,6 +991,8 @@ class IncomeExpenseWidget(BaseWidget):
 
         self.setLayout(layout)
         self.update_table()
+        self.load_monthly_income()  # 初期収入データの読み込み
+        self.update_monthly_expense()  # 初期支出データの更新
 
     def add_goal_progress_to_income_expense(self):
         # 月間目標の達成状況表示
@@ -1126,9 +1129,15 @@ class IncomeExpenseWidget(BaseWidget):
             self.selected_period_label.setText(
                 f'{self.current_year}年{self.current_month}月'
             )
+            
+            # ↓ この部分を修正（順序を変更）
+            self.load_monthly_income()      # 収入を先に読み込み
             self.update_table()
-            self.load_monthly_income()
             self.update_monthly_expense()
+            
+            # 目標進捗も更新（あれば）
+            if hasattr(self, 'update_goal_progress'):
+                self.update_goal_progress()
 
     def add_expense(self):
         try:
@@ -1193,6 +1202,8 @@ class IncomeExpenseWidget(BaseWidget):
                 self.monthly_income_input.setText(f"{result[0]:,.0f}")
             else:
                 self.monthly_income_input.clear()
+
+            self.calculate_monthly_balance()    
             
         except Exception as e:
             QMessageBox.warning(self, '警告', f'収入データの読み込みに失敗しました: {str(e)}')
