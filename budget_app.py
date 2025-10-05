@@ -2623,16 +2623,29 @@ class GoalManagementWidget(BaseWidget):
         category_form_layout.addRow('カテゴリ:', self.category_combo)
         category_form_layout.addRow('目標金額 (円):', self.category_goal_input)
         
+        button_layout = QHBoxLayout()
+
         save_category_button = QPushButton('カテゴリ目標を保存')
         save_category_button.clicked.connect(self.save_category_goal)
+
+        # 削除ボタンを追加
+        delete_category_goal_button = QPushButton('選択した目標を削除')
+        delete_category_goal_button.clicked.connect(self.delete_category_goal)
+        delete_category_goal_button.setStyleSheet('background-color: #FF6B6B; color: white;')
+
+        button_layout.addWidget(save_category_button)
+        button_layout.addWidget(delete_category_goal_button)
         
         category_layout.addLayout(category_form_layout)
+        category_layout.addLayout(button_layout)
         category_layout.addWidget(save_category_button)
         
         # カテゴリ別目標と実績の一覧テーブル
         self.category_goal_table = QTableWidget(0, 4)
         self.category_goal_table.setHorizontalHeaderLabels(['カテゴリ', '目標額', '実績', '達成率'])
         self.category_goal_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.category_goal_table.setSelectionBehavior(QTableWidget.SelectRows)  # ←追加
+        self.category_goal_table.setSelectionMode(QTableWidget.SingleSelection)  # ←追加
         
         category_layout.addWidget(QLabel('<b>カテゴリ別目標と実績</b>'))
         category_layout.addWidget(self.category_goal_table)
@@ -3015,6 +3028,64 @@ class GoalManagementWidget(BaseWidget):
         chart.legend().setAlignment(Qt.AlignBottom)
         
         self.history_chart_view.setChart(chart)
+
+    def delete_category_goal(self):
+        """選択されたカテゴリ別目標を削除"""
+        # 選択された行を取得
+        selected_rows = self.category_goal_table.selectedItems()
+        
+        if not selected_rows:
+            QMessageBox.warning(self, '警告', '削除する目標を選択してください')
+            return
+        
+        # 選択された行のカテゴリを取得
+        row = selected_rows[0].row()
+        category = self.category_goal_table.item(row, 0).text()
+        goal_amount = self.category_goal_table.item(row, 1).text()
+        
+        # 確認ダイアログ
+        reply = QMessageBox.question(
+            self, '確認', 
+            f'{self.current_year}年{self.current_month}月の\n'
+            f'「{category}」の目標（{goal_amount}円）を削除してもよろしいですか？',
+            QMessageBox.Yes | QMessageBox.No, 
+            QMessageBox.No
+        )
+        
+        if reply != QMessageBox.Yes:
+            return
+        
+        try:
+            # データベースから削除
+            execute_query('''
+                DELETE FROM category_goals
+                WHERE year = ? AND month = ? AND category = ?
+            ''', (self.current_year, self.current_month, category))
+            
+            QMessageBox.information(self, '成功', f'「{category}」の目標を削除しました')
+            
+            # 表示を更新
+            self.update_category_table()
+            self.update_progress_display()
+            
+            # 履歴チャートも更新
+            if hasattr(self, 'update_history_chart'):
+                self.update_history_chart()
+            
+            # 他のウィジェットも更新
+            self.notify_goal_update()
+            
+        except Exception as e:
+            QMessageBox.critical(self, 'エラー', f'削除中にエラーが発生しました: {str(e)}')
+
+    def notify_goal_update(self):
+        """目標データが更新されたことを他のウィジェットに通知"""
+        try:
+            # 親ウィジェット（BudgetApp）のメソッドを呼び出す
+            if hasattr(self.parent, 'update_goal_data_across_widgets'):
+                self.parent.update_goal_data_across_widgets()
+        except Exception as e:
+            print(f"目標更新通知中にエラー: {e}")    
 
 class DiagnosticReportWidget(BaseWidget):
     def __init__(self, parent=None):
