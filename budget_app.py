@@ -1,3 +1,5 @@
+# 正しいインポート文の修正版
+
 # PyQt5 ウィジェット
 from PyQt5.QtWidgets import (
     # アプリケーション/ウィンドウの基本クラス
@@ -25,14 +27,14 @@ from PyQt5.QtWidgets import (
     QSizePolicy, QSpacerItem, QColorDialog, QInputDialog
 )
 
-# PyQt5 コアとグラフィック
-from PyQt5.QtCore import Qt, QDate, QMargins, QPointF
+# PyQt5 コアとグラフィック（修正版）
+from PyQt5.QtCore import Qt, QDate, QMargins, QPointF, QDateTime
 from PyQt5.QtGui import QFont, QColor, QIcon, QPen
 
-# PyQt5 チャート関連
+# PyQt5 チャート関連（修正版）
 from PyQt5.QtChart import (
     QChart, QChartView, QPieSeries, QPieSlice, QBarSeries, 
-    QBarSet, QValueAxis, QBarCategoryAxis, QLineSeries
+    QBarSet, QValueAxis, QBarCategoryAxis, QLineSeries, QDateTimeAxis
 )
 
 # その他のライブラリ
@@ -8117,6 +8119,9 @@ class AssetManagementWidget(BaseWidget):
         # 資産推移チャート更新
         self.update_history_chart()
 
+        # 初期履歴データを作成（履歴がない場合）
+        self.create_initial_asset_history()
+
         # 資産構成円グラフ更新
         if hasattr(self, 'composition_tab'):
             self.update_asset_composition_charts()
@@ -8251,8 +8256,11 @@ class AssetManagementWidget(BaseWidget):
     
     
     def update_history_chart(self):
-        """資産推移チャートを更新"""
+        """資産推移チャートを更新（診断・修正版）"""
+        print("=== 資産推移チャート更新開始 ===")
+        
         period = self.period_combo.currentText()
+        print(f"選択期間: {period}")
         
         # 期間に応じた日数を計算
         if period == '過去3ヶ月':
@@ -8264,62 +8272,256 @@ class AssetManagementWidget(BaseWidget):
         else:  # 全期間
             days = None
         
-        # 履歴データを取得
+        print(f"フィルタ日数: {days}")
+        
+        # データベース接続
         conn = sqlite3.connect('budget.db')
+        c = conn.cursor()
         
-        if days:
-            query = '''
-                SELECT record_date, SUM(balance) as total_balance
-                FROM asset_history
-                WHERE record_date >= date('now', ?)
-                GROUP BY record_date
-                ORDER BY record_date
-            '''
-            df = pd.read_sql_query(query, conn, params=(f'-{days} days',))
-        else:
-            query = '''
-                SELECT record_date, SUM(balance) as total_balance
-                FROM asset_history
-                GROUP BY record_date
-                ORDER BY record_date
-            '''
-            df = pd.read_sql_query(query, conn)
-        
-        conn.close()
-        
-        if df.empty:
-            # データがない場合は空のチャートを表示
+        try:
+            # まず現在の資産データを確認
+            c.execute('SELECT COUNT(*) FROM assets WHERE balance > 0')
+            asset_count = c.fetchone()[0]
+            print(f"資産テーブルのレコード数: {asset_count}")
+            
+            if asset_count > 0:
+                c.execute('SELECT account_name, balance FROM assets WHERE balance > 0')
+                assets = c.fetchall()
+                print("現在の資産:")
+                for name, balance in assets:
+                    print(f"  {name}: {balance:,.0f}円")
+            
+            # 履歴テーブルの確認
+            c.execute('SELECT COUNT(*) FROM asset_history')
+            history_count = c.fetchone()[0]
+            print(f"履歴テーブルのレコード数: {history_count}")
+            
+            # 履歴データがない場合の初期化
+            if history_count == 0 and asset_count > 0:
+                print("履歴データがないため、現在のデータから初期化中...")
+                today = datetime.now().strftime('%Y-%m-%d')
+                
+                c.execute('SELECT id, balance FROM assets WHERE balance > 0')
+                assets = c.fetchall()
+                
+                for asset_id, balance in assets:
+                    c.execute('''
+                        INSERT INTO asset_history (asset_id, record_date, balance)
+                        VALUES (?, ?, ?)
+                    ''', (asset_id, today, balance))
+                    print(f"  資産ID {asset_id} の履歴を作成: {balance:,.0f}円")
+                
+                conn.commit()
+                print("履歴データ初期化完了")
+            
+            # 履歴データを取得
+            if days:
+                query = '''
+                    SELECT record_date, SUM(balance) as total_balance
+                    FROM asset_history
+                    WHERE record_date >= date('now', ?)
+                    GROUP BY record_date
+                    ORDER BY record_date
+                '''
+                c.execute(query, (f'-{days} days',))
+            else:
+                query = '''
+                    SELECT record_date, SUM(balance) as total_balance
+                    FROM asset_history
+                    GROUP BY record_date
+                    ORDER BY record_date
+                '''
+                c.execute(query)
+            
+            history_data = c.fetchall()
+            print(f"取得した履歴データ数: {len(history_data)}")
+            
+            if history_data:
+                print("履歴データ:")
+                for date, balance in history_data:
+                    print(f"  {date}: {balance:,.0f}円")
+            
+            conn.close()
+            
+            # チャート作成
             chart = QChart()
-            chart.setTitle("資産推移データがありません")
+            chart.setAnimationOptions(QChart.SeriesAnimations)
+            
+            if history_data and len(history_data) > 0:
+                print("チャート作成中...")
+                
+                series = QLineSeries()
+                series.setName("総資産")
+                
+                # シンプルなインデックスベースでデータを追加
+                for i, (record_date, total_balance) in enumerate(history_data):
+                    if total_balance is not None:
+                        series.append(i, total_balance)
+                        print(f"  データポイント追加: ({i}, {total_balance:,.0f})")
+                
+                # 線のスタイル設定
+                series.setColor(QColor("#667eea"))
+                pen = QPen()
+                pen.setWidth(3)
+                series.setPen(pen)
+                
+                chart.addSeries(series)
+                print("シリーズ追加完了")
+                
+                # X軸設定（シンプルな値軸を使用）
+                axis_x = QValueAxis()
+                axis_x.setRange(0, max(1, len(history_data) - 1))
+                axis_x.setTickCount(min(6, len(history_data)))
+                axis_x.setLabelFormat("%.0f")
+                chart.addAxis(axis_x, Qt.AlignBottom)
+                series.attachAxis(axis_x)
+                print("X軸設定完了")
+                
+                # Y軸設定
+                values = [balance for _, balance in history_data if balance is not None]
+                if values:
+                    min_value = min(values)
+                    max_value = max(values)
+                    print(f"Y軸範囲: {min_value:,.0f} - {max_value:,.0f}")
+                    
+                    if max_value > min_value:
+                        margin = (max_value - min_value) * 0.1
+                    else:
+                        margin = max_value * 0.1
+                    
+                    axis_y = QValueAxis()
+                    axis_y.setRange(max(0, min_value - margin), max_value + margin)
+                    axis_y.setLabelFormat("%,.0f")
+                    chart.addAxis(axis_y, Qt.AlignLeft)
+                    series.attachAxis(axis_y)
+                    print("Y軸設定完了")
+                
+                chart.setTitle(f"資産推移 ({period})")
+                print("チャートタイトル設定完了")
+                
+            else:
+                print("データがないため、空のチャートを作成")
+                # 空のチャートでも軸を設定
+                series = QLineSeries()
+                series.setName("データなし")
+                chart.addSeries(series)
+                
+                axis_x = QValueAxis()
+                axis_x.setRange(0, 1)
+                chart.addAxis(axis_x, Qt.AlignBottom)
+                series.attachAxis(axis_x)
+                
+                axis_y = QValueAxis()
+                axis_y.setRange(0, 1000000)
+                axis_y.setLabelFormat("%,.0f")
+                chart.addAxis(axis_y, Qt.AlignLeft)
+                series.attachAxis(axis_y)
+                
+                chart.setTitle("資産データがありません\n口座を追加して残高を入力してください")
+            
+            chart.legend().setVisible(True)
+            chart.legend().setAlignment(Qt.AlignBottom)
+            
+            print("チャートをビューに設定中...")
             self.history_chart_view.setChart(chart)
-            return
+            print("チャート設定完了")
+            
+        except Exception as e:
+            print(f"エラー発生: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # エラー時のチャート
+            error_chart = QChart()
+            error_chart.setTitle(f"エラーが発生しました: {str(e)}")
+            self.history_chart_view.setChart(error_chart)
+            
+            try:
+                conn.close()
+            except:
+                pass
         
-        # チャート作成
-        chart = QChart()
-        chart.setAnimationOptions(QChart.SeriesAnimations)
-        
-        series = QLineSeries()
-        series.setName("総資産")
-        
-        df['record_date'] = pd.to_datetime(df['record_date'])
-        
-        for _, row in df.iterrows():
-            series.append(
-                row['record_date'].timestamp() * 1000,
-                row['total_balance']
-            )
-        
-        series.setColor(QColor("#667eea"))
-        pen = QPen()
-        pen.setWidth(3)
-        series.setPen(pen)
-        
-        chart.addSeries(series)
-        chart.setTitle("資産推移")
-        chart.legend().setVisible(True)
-        chart.legend().setAlignment(Qt.AlignBottom)
-        
-        self.history_chart_view.setChart(chart)
+        print("=== 資産推移チャート更新終了 ===")
+
+    # 追加: 資産データを手動で作成するメソッド
+    def create_test_asset_data(self):
+        """テスト用の資産データを作成"""
+        try:
+            conn = sqlite3.connect('budget.db')
+            c = conn.cursor()
+            
+            # テスト資産を追加
+            test_assets = [
+                ('bank', 'テスト銀行', 1000000, '普通預金'),
+                ('securities', 'テスト証券', 500000, 'NISA口座')
+            ]
+            
+            today = datetime.now().strftime('%Y-%m-%d')
+            
+            for account_type, account_name, balance, notes in test_assets:
+                # 既存チェック
+                c.execute('SELECT id FROM assets WHERE account_name = ?', (account_name,))
+                if not c.fetchone():
+                    c.execute('''
+                        INSERT INTO assets (account_type, account_name, balance, last_updated, notes)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', (account_type, account_name, balance, today, notes))
+                    
+                    asset_id = c.lastrowid
+                    
+                    # 履歴データも作成
+                    c.execute('''
+                        INSERT INTO asset_history (asset_id, record_date, balance)
+                        VALUES (?, ?, ?)
+                    ''', (asset_id, today, balance))
+            
+            conn.commit()
+            conn.close()
+            
+            print("テスト資産データを作成しました")
+            return True
+            
+        except Exception as e:
+            print(f"テストデータ作成エラー: {e}")
+            return False
+
+    # 資産履歴データを手動で作成するためのメソッド
+    def create_initial_asset_history(self):
+        """現在の資産データから初期履歴データを作成"""
+        try:
+            conn = sqlite3.connect('budget.db')
+            c = conn.cursor()
+            
+            # 既存の履歴データ数をチェック
+            c.execute('SELECT COUNT(*) FROM asset_history')
+            history_count = c.fetchone()[0]
+            
+            if history_count == 0:
+                # 現在の資産データを取得
+                c.execute('''
+                    SELECT id, balance
+                    FROM assets
+                    WHERE balance > 0
+                ''')
+                assets = c.fetchall()
+                
+                if assets:
+                    today = datetime.now().strftime('%Y-%m-%d')
+                    
+                    # 各資産の現在の残高を履歴として追加
+                    for asset_id, balance in assets:
+                        c.execute('''
+                            INSERT INTO asset_history (asset_id, record_date, balance)
+                            VALUES (?, ?, ?)
+                        ''', (asset_id, today, balance))
+                    
+                    conn.commit()
+                    print(f"初期資産履歴データを作成しました: {len(assets)}件")
+                
+            conn.close()
+            
+        except Exception as e:
+            print(f"初期履歴データ作成エラー: {e}")        
 
     def setup_asset_composition_tab(self):
         """資産構成タブのUI（円グラフ）"""
