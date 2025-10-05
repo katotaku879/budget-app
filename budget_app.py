@@ -171,6 +171,7 @@ class BaseWidget(QWidget):
         self.ai_advisor_button = QPushButton('AIアドバイザー')
         self.diagnostic_report_button = QPushButton('診断レポート')
         self.comprehensive_analysis_button = QPushButton('全データ分析')  # ←追加
+        self.asset_management_button = QPushButton('資産管理')  # ←追加
         
         # ボタンをレイアウトに追加
         buttons = [
@@ -181,7 +182,8 @@ class BaseWidget(QWidget):
             self.savings_goal_button,
             self.ai_advisor_button,
             self.diagnostic_report_button,
-            self.comprehensive_analysis_button  # ←追加
+            self.comprehensive_analysis_button,
+            self.asset_management_button
         ]
         
         for button in buttons:
@@ -552,6 +554,41 @@ class BudgetApp(QMainWindow):
             )
         ''')
 
+        # 資産管理テーブルの作成
+        execute_query('''
+            CREATE TABLE IF NOT EXISTS assets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_type TEXT NOT NULL,  -- 'bank' または 'securities'
+                account_name TEXT NOT NULL,  -- 銀行名や証券会社名
+                balance REAL NOT NULL DEFAULT 0,  -- 残高または評価額
+                last_updated TEXT,  -- 最終更新日
+                notes TEXT,  -- 備考（口座種別など）
+                created_at TEXT DEFAULT (datetime('now', 'localtime'))
+            )
+        ''')
+        
+        # 資産履歴テーブルの作成
+        execute_query('''
+            CREATE TABLE IF NOT EXISTS asset_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                asset_id INTEGER NOT NULL,
+                record_date TEXT NOT NULL,  -- 記録日
+                balance REAL NOT NULL,  -- その時点での残高
+                FOREIGN KEY (asset_id) REFERENCES assets(id)
+            )
+        ''')
+        
+        # インデックスの作成（検索高速化）
+        execute_query('''
+            CREATE INDEX IF NOT EXISTS idx_asset_history_date 
+            ON asset_history(record_date)
+        ''')
+        
+        execute_query('''
+            CREATE INDEX IF NOT EXISTS idx_asset_history_asset_id 
+            ON asset_history(asset_id)
+        ''')
+
         # デフォルトカテゴリの追加（まだデータがない場合）
         category_count = execute_query('SELECT COUNT(*) FROM categories', fetch_one=True)
         if category_count[0] == 0:
@@ -616,7 +653,8 @@ class BudgetApp(QMainWindow):
             'diagnostic_report': DiagnosticReportWidget,
             'savings_goal': SavingsGoalWidget,
             'ai_advisor': AIExpenseAdvisorWidget,
-            'comprehensive_analysis': ComprehensiveAnalysisWidget  # ←追加
+            'comprehensive_analysis': ComprehensiveAnalysisWidget,
+            'asset_management': AssetManagementWidget  # ←この行があるか確認
         }
 
         # ウィジェットの作成と追加を同時に行う
@@ -695,7 +733,8 @@ class BudgetApp(QMainWindow):
             'diagnostic_report': self.diagnostic_report_widget,
             'savings_goal': self.savings_goal_widget,
             'ai_advisor': self.ai_advisor_widget,
-            'comprehensive_analysis': self.comprehensive_analysis_widget  # ←追加
+            'comprehensive_analysis': self.comprehensive_analysis_widget,
+            'asset_management': self.asset_management_widget  
         }
         
         # ボタン名とターゲットウィジェットのマッピング
@@ -707,7 +746,8 @@ class BudgetApp(QMainWindow):
             'diagnostic_report_button': self.diagnostic_report_widget,
             'savings_goal_button': self.savings_goal_widget,
             'ai_advisor_button': self.ai_advisor_widget,
-            'comprehensive_analysis_button': self.comprehensive_analysis_widget  # ←追加
+            'comprehensive_analysis_button': self.comprehensive_analysis_widget,
+            'asset_management_button': self.asset_management_widget  
         }
         
         # 各ウィジェットについて処理
@@ -7794,7 +7834,830 @@ class ComprehensiveAnalysisWidget(BaseWidget):
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(report_text)
             
-            QMessageBox.information(self, '成功', f'レポートを保存しました:\n{file_path}')                      
+            QMessageBox.information(self, '成功', f'レポートを保存しました:\n{file_path}')  
+
+class AssetManagementWidget(BaseWidget):
+    """銀行・証券の資産管理ウィジェット"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.initUI()
+        self.load_assets()
+    
+    def initUI(self):
+        layout = QVBoxLayout()
+        
+        # ナビゲーションボタン
+        layout.addLayout(self.button_layout)
+        
+        # タイトル
+        title_label = QLabel("<h1>💰 資産管理</h1>")
+        title_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title_label)
+        
+        # 総資産表示カード
+        self.total_assets_card = self.create_total_assets_card()
+        layout.addWidget(self.total_assets_card)
+        
+        # タブウィジェット
+        self.tab_widget = QTabWidget()
+        
+        # タブ1: 資産一覧
+        self.assets_list_tab = QWidget()
+        self.setup_assets_list_tab()
+        self.tab_widget.addTab(self.assets_list_tab, "📋 資産一覧")
+        
+        # タブ2: 銀行口座
+        self.bank_tab = QWidget()
+        self.setup_bank_tab()
+        self.tab_widget.addTab(self.bank_tab, "🏦 銀行口座")
+        
+        # タブ3: 証券口座
+        self.securities_tab = QWidget()
+        self.setup_securities_tab()
+        self.tab_widget.addTab(self.securities_tab, "📈 証券口座")
+        
+        # タブ4: 資産推移
+        self.history_tab = QWidget()
+        self.setup_history_tab()
+        self.tab_widget.addTab(self.history_tab, "📊 資産推移")
+        
+        layout.addWidget(self.tab_widget)
+        
+        self.setLayout(layout)
+    
+    def create_total_assets_card(self):
+        """総資産表示カードを作成"""
+        card = QFrame()
+        card.setFrameShape(QFrame.StyledPanel)
+        card.setStyleSheet("""
+            QFrame {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #667eea, stop:1 #764ba2);
+                border-radius: 15px;
+                padding: 20px;
+            }
+        """)
+        card.setMinimumHeight(150)
+        
+        card_layout = QVBoxLayout()
+        
+        # タイトル
+        title = QLabel("💎 総資産")
+        title.setStyleSheet("color: white; font-size: 16px; font-weight: bold;")
+        title.setAlignment(Qt.AlignCenter)
+        
+        # 総資産額
+        self.total_assets_label = QLabel("0円")
+        self.total_assets_label.setStyleSheet("color: white; font-size: 36px; font-weight: bold;")
+        self.total_assets_label.setAlignment(Qt.AlignCenter)
+        
+        # 内訳
+        breakdown_layout = QHBoxLayout()
+        
+        self.bank_total_label = QLabel("🏦 銀行: 0円")
+        self.bank_total_label.setStyleSheet("color: white; font-size: 14px;")
+        
+        self.securities_total_label = QLabel("📈 証券: 0円")
+        self.securities_total_label.setStyleSheet("color: white; font-size: 14px;")
+        
+        breakdown_layout.addWidget(self.bank_total_label)
+        breakdown_layout.addStretch()
+        breakdown_layout.addWidget(self.securities_total_label)
+        
+        card_layout.addWidget(title)
+        card_layout.addWidget(self.total_assets_label)
+        card_layout.addLayout(breakdown_layout)
+        
+        card.setLayout(card_layout)
+        return card
+    
+    def setup_assets_list_tab(self):
+        """資産一覧タブのUI"""
+        layout = QVBoxLayout()
+        
+        # 資産一覧テーブル
+        self.assets_table = QTableWidget(0, 5)
+        self.assets_table.setHorizontalHeaderLabels([
+            '種別', '口座名', '残高', '更新日', '備考'
+        ])
+        self.assets_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout.addWidget(self.assets_table)
+        
+        # ボタンレイアウト
+        button_layout = QHBoxLayout()
+        
+        refresh_button = QPushButton("🔄 更新")
+        refresh_button.clicked.connect(self.load_assets)
+        
+        add_button = QPushButton("➕ 口座追加")
+        add_button.clicked.connect(self.show_add_account_dialog)
+        
+        edit_button = QPushButton("✏️ 編集")
+        edit_button.clicked.connect(self.edit_selected_account)
+        
+        delete_button = QPushButton("🗑️ 削除")
+        delete_button.clicked.connect(self.delete_selected_account)
+        delete_button.setStyleSheet("background-color: #FF6B6B; color: white;")
+        
+        button_layout.addWidget(refresh_button)
+        button_layout.addWidget(add_button)
+        button_layout.addWidget(edit_button)
+        button_layout.addWidget(delete_button)
+        
+        layout.addLayout(button_layout)
+        
+        self.assets_list_tab.setLayout(layout)
+    
+    def setup_bank_tab(self):
+        """銀行口座タブのUI"""
+        layout = QVBoxLayout()
+        
+        # 銀行口座一覧
+        self.bank_table = QTableWidget(0, 4)
+        self.bank_table.setHorizontalHeaderLabels([
+            '銀行名', '口座種別', '残高', '更新日'
+        ])
+        self.bank_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout.addWidget(QLabel("<b>🏦 銀行口座一覧</b>"))
+        layout.addWidget(self.bank_table)
+        
+        # 銀行口座合計
+        bank_total_layout = QHBoxLayout()
+        bank_total_layout.addStretch()
+        self.bank_subtotal_label = QLabel("銀行口座合計: 0円")
+        self.bank_subtotal_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #4CAF50;")
+        bank_total_layout.addWidget(self.bank_subtotal_label)
+        layout.addLayout(bank_total_layout)
+        
+        # ボタン
+        button_layout = QHBoxLayout()
+        
+        add_bank_button = QPushButton("➕ 銀行口座追加")
+        add_bank_button.clicked.connect(lambda: self.show_add_account_dialog('bank'))
+        
+        update_balance_button = QPushButton("💰 残高更新")
+        update_balance_button.clicked.connect(self.update_bank_balance)
+        
+        button_layout.addWidget(add_bank_button)
+        button_layout.addWidget(update_balance_button)
+        button_layout.addStretch()
+        
+        layout.addLayout(button_layout)
+        
+        self.bank_tab.setLayout(layout)
+    
+    def setup_securities_tab(self):
+        """証券口座タブのUI"""
+        layout = QVBoxLayout()
+        
+        # 証券口座一覧
+        self.securities_table = QTableWidget(0, 4)
+        self.securities_table.setHorizontalHeaderLabels([
+            '証券会社', '口座種別', '評価額', '更新日'
+        ])
+        self.securities_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout.addWidget(QLabel("<b>📈 証券口座一覧</b>"))
+        layout.addWidget(self.securities_table)
+        
+        # 証券口座合計
+        securities_total_layout = QHBoxLayout()
+        securities_total_layout.addStretch()
+        self.securities_subtotal_label = QLabel("証券口座合計: 0円")
+        self.securities_subtotal_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #2196F3;")
+        securities_total_layout.addWidget(self.securities_subtotal_label)
+        layout.addLayout(securities_total_layout)
+        
+        # ボタン
+        button_layout = QHBoxLayout()
+        
+        add_securities_button = QPushButton("➕ 証券口座追加")
+        add_securities_button.clicked.connect(lambda: self.show_add_account_dialog('securities'))
+        
+        update_value_button = QPushButton("💹 評価額更新")
+        update_value_button.clicked.connect(self.update_securities_value)
+        
+        button_layout.addWidget(add_securities_button)
+        button_layout.addWidget(update_value_button)
+        button_layout.addStretch()
+        
+        layout.addLayout(button_layout)
+        
+        self.securities_tab.setLayout(layout)
+    
+    def setup_history_tab(self):
+        """資産推移タブのUI"""
+        layout = QVBoxLayout()
+        
+        # 期間選択
+        period_layout = QHBoxLayout()
+        period_layout.addWidget(QLabel("表示期間:"))
+        
+        self.period_combo = QComboBox()
+        self.period_combo.addItems(['過去3ヶ月', '過去6ヶ月', '過去1年', '全期間'])
+        self.period_combo.currentIndexChanged.connect(self.update_history_chart)
+        
+        period_layout.addWidget(self.period_combo)
+        period_layout.addStretch()
+        
+        layout.addLayout(period_layout)
+        
+        # 資産推移チャート
+        self.history_chart_view = QChartView()
+        self.history_chart_view.setMinimumHeight(400)
+        layout.addWidget(self.history_chart_view)
+        
+        self.history_tab.setLayout(layout)
+    
+    def load_assets(self):
+        """資産データを読み込む"""
+        conn = sqlite3.connect('budget.db')
+        c = conn.cursor()
+        
+        # 全資産取得
+        c.execute('''
+            SELECT id, account_type, account_name, balance, last_updated, notes
+            FROM assets
+            ORDER BY account_type, account_name
+        ''')
+        
+        all_assets = c.fetchall()
+        conn.close()
+        
+        # 総資産計算
+        total_assets = sum(asset[3] for asset in all_assets)
+        bank_total = sum(asset[3] for asset in all_assets if asset[1] == 'bank')
+        securities_total = sum(asset[3] for asset in all_assets if asset[1] == 'securities')
+        
+        # 総資産カード更新
+        self.total_assets_label.setText(f"{total_assets:,.0f}円")
+        self.bank_total_label.setText(f"🏦 銀行: {bank_total:,.0f}円")
+        self.securities_total_label.setText(f"📈 証券: {securities_total:,.0f}円")
+        
+        # 資産一覧テーブル更新
+        self.update_assets_table(all_assets)
+        
+        # 銀行口座テーブル更新
+        bank_assets = [asset for asset in all_assets if asset[1] == 'bank']
+        self.update_bank_table(bank_assets)
+        self.bank_subtotal_label.setText(f"銀行口座合計: {bank_total:,.0f}円")
+        
+        # 証券口座テーブル更新
+        securities_assets = [asset for asset in all_assets if asset[1] == 'securities']
+        self.update_securities_table(securities_assets)
+        self.securities_subtotal_label.setText(f"証券口座合計: {securities_total:,.0f}円")
+        
+        # 資産推移チャート更新
+        self.update_history_chart()
+    
+    def update_assets_table(self, assets):
+        """資産一覧テーブルを更新"""
+        self.assets_table.setRowCount(0)
+        
+        for asset in assets:
+            asset_id, account_type, account_name, balance, last_updated, notes = asset
+            
+            row = self.assets_table.rowCount()
+            self.assets_table.insertRow(row)
+            
+            # 種別の表示名
+            type_name = "🏦 銀行" if account_type == 'bank' else "📈 証券"
+            
+            self.assets_table.setItem(row, 0, QTableWidgetItem(type_name))
+            self.assets_table.setItem(row, 1, QTableWidgetItem(account_name))
+            self.assets_table.setItem(row, 2, QTableWidgetItem(f"{balance:,.0f}円"))
+            self.assets_table.setItem(row, 3, QTableWidgetItem(last_updated or '-'))
+            self.assets_table.setItem(row, 4, QTableWidgetItem(notes or '-'))
+            
+            # IDを非表示データとして保存
+            self.assets_table.item(row, 0).setData(Qt.UserRole, asset_id)
+    
+    def update_bank_table(self, bank_assets):
+        """銀行口座テーブルを更新"""
+        self.bank_table.setRowCount(0)
+        
+        for asset in bank_assets:
+            asset_id, _, account_name, balance, last_updated, notes = asset
+            
+            row = self.bank_table.rowCount()
+            self.bank_table.insertRow(row)
+            
+            self.bank_table.setItem(row, 0, QTableWidgetItem(account_name))
+            self.bank_table.setItem(row, 1, QTableWidgetItem(notes or '普通預金'))
+            self.bank_table.setItem(row, 2, QTableWidgetItem(f"{balance:,.0f}円"))
+            self.bank_table.setItem(row, 3, QTableWidgetItem(last_updated or '-'))
+            
+            self.bank_table.item(row, 0).setData(Qt.UserRole, asset_id)
+    
+    def update_securities_table(self, securities_assets):
+        """証券口座テーブルを更新"""
+        self.securities_table.setRowCount(0)
+        
+        for asset in securities_assets:
+            asset_id, _, account_name, balance, last_updated, notes = asset
+            
+            row = self.securities_table.rowCount()
+            self.securities_table.insertRow(row)
+            
+            self.securities_table.setItem(row, 0, QTableWidgetItem(account_name))
+            self.securities_table.setItem(row, 1, QTableWidgetItem(notes or '一般口座'))
+            self.securities_table.setItem(row, 2, QTableWidgetItem(f"{balance:,.0f}円"))
+            self.securities_table.setItem(row, 3, QTableWidgetItem(last_updated or '-'))
+            
+            self.securities_table.item(row, 0).setData(Qt.UserRole, asset_id)
+    
+    def show_add_account_dialog(self, account_type=None):
+        """口座追加ダイアログを表示"""
+        dialog = AddAccountDialog(account_type, parent=self)
+        if dialog.exec_() == QDialog.Accepted:
+            self.load_assets()
+    
+    def edit_selected_account(self):
+        """選択された口座を編集"""
+        selected_items = self.assets_table.selectedItems()
+        
+        if not selected_items:
+            QMessageBox.warning(self, '警告', '編集する口座を選択してください')
+            return
+        
+        row = selected_items[0].row()
+        asset_id = self.assets_table.item(row, 0).data(Qt.UserRole)
+        
+        dialog = EditAccountDialog(asset_id, parent=self)
+        if dialog.exec_() == QDialog.Accepted:
+            self.load_assets()
+    
+    def delete_selected_account(self):
+        """選択された口座を削除"""
+        selected_items = self.assets_table.selectedItems()
+        
+        if not selected_items:
+            QMessageBox.warning(self, '警告', '削除する口座を選択してください')
+            return
+        
+        row = selected_items[0].row()
+        asset_id = self.assets_table.item(row, 0).data(Qt.UserRole)
+        account_name = self.assets_table.item(row, 1).text()
+        
+        reply = QMessageBox.question(
+            self, '確認',
+            f'「{account_name}」を削除してもよろしいですか？\n関連する履歴データも削除されます。',
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            try:
+                conn = sqlite3.connect('budget.db')
+                c = conn.cursor()
+                
+                # 履歴データも削除
+                c.execute('DELETE FROM asset_history WHERE asset_id = ?', (asset_id,))
+                
+                # 資産データ削除
+                c.execute('DELETE FROM assets WHERE id = ?', (asset_id,))
+                
+                conn.commit()
+                conn.close()
+                
+                QMessageBox.information(self, '成功', '口座を削除しました')
+                self.load_assets()
+                
+            except Exception as e:
+                QMessageBox.critical(self, 'エラー', f'削除中にエラーが発生しました: {str(e)}')
+    
+    def update_bank_balance(self):
+        """銀行口座残高を一括更新"""
+        dialog = UpdateBalanceDialog('bank', parent=self)
+        if dialog.exec_() == QDialog.Accepted:
+            self.load_assets()
+    
+    def update_securities_value(self):
+        """証券口座評価額を一括更新"""
+        dialog = UpdateBalanceDialog('securities', parent=self)
+        if dialog.exec_() == QDialog.Accepted:
+            self.load_assets()
+    
+    def update_history_chart(self):
+        """資産推移チャートを更新"""
+        period = self.period_combo.currentText()
+        
+        # 期間に応じた日数を計算
+        if period == '過去3ヶ月':
+            days = 90
+        elif period == '過去6ヶ月':
+            days = 180
+        elif period == '過去1年':
+            days = 365
+        else:  # 全期間
+            days = None
+        
+        # 履歴データを取得
+        conn = sqlite3.connect('budget.db')
+        
+        if days:
+            query = '''
+                SELECT record_date, SUM(balance) as total_balance
+                FROM asset_history
+                WHERE record_date >= date('now', ?)
+                GROUP BY record_date
+                ORDER BY record_date
+            '''
+            df = pd.read_sql_query(query, conn, params=(f'-{days} days',))
+        else:
+            query = '''
+                SELECT record_date, SUM(balance) as total_balance
+                FROM asset_history
+                GROUP BY record_date
+                ORDER BY record_date
+            '''
+            df = pd.read_sql_query(query, conn)
+        
+        conn.close()
+        
+        if df.empty:
+            # データがない場合は空のチャートを表示
+            chart = QChart()
+            chart.setTitle("資産推移データがありません")
+            self.history_chart_view.setChart(chart)
+            return
+        
+        # チャート作成
+        chart = QChart()
+        chart.setAnimationOptions(QChart.SeriesAnimations)
+        
+        series = QLineSeries()
+        series.setName("総資産")
+        
+        df['record_date'] = pd.to_datetime(df['record_date'])
+        
+        for _, row in df.iterrows():
+            series.append(
+                row['record_date'].timestamp() * 1000,
+                row['total_balance']
+            )
+        
+        series.setColor(QColor("#667eea"))
+        pen = QPen()
+        pen.setWidth(3)
+        series.setPen(pen)
+        
+        chart.addSeries(series)
+        chart.setTitle("資産推移")
+        chart.legend().setVisible(True)
+        chart.legend().setAlignment(Qt.AlignBottom)
+        
+        self.history_chart_view.setChart(chart)
+
+
+class AddAccountDialog(QDialog):
+    """口座追加ダイアログ"""
+    
+    def __init__(self, account_type=None, parent=None):
+        super().__init__(parent)
+        self.account_type = account_type
+        self.setWindowTitle('口座追加')
+        self.setMinimumWidth(400)
+        self.initUI()
+    
+    def initUI(self):
+        layout = QVBoxLayout()
+        
+        form_layout = QFormLayout()
+        
+        # 種別選択
+        self.type_combo = QComboBox()
+        self.type_combo.addItems(['銀行', '証券'])
+        if self.account_type == 'bank':
+            self.type_combo.setCurrentText('銀行')
+        elif self.account_type == 'securities':
+            self.type_combo.setCurrentText('証券')
+        
+        form_layout.addRow('種別:', self.type_combo)
+        
+        # 口座名
+        self.account_name_input = QLineEdit()
+        self.account_name_input.setPlaceholderText('例: 三菱UFJ銀行、SBI証券')
+        form_layout.addRow('口座名:', self.account_name_input)
+        
+        # 残高/評価額
+        self.balance_input = QLineEdit()
+        self.balance_input.setPlaceholderText('例: 1000000')
+        form_layout.addRow('残高/評価額 (円):', self.balance_input)
+        
+        # 備考
+        self.notes_input = QLineEdit()
+        self.notes_input.setPlaceholderText('例: 普通預金、NISA口座')
+        form_layout.addRow('備考:', self.notes_input)
+        
+        layout.addLayout(form_layout)
+        
+        # ボタン
+        button_layout = QHBoxLayout()
+        
+        save_button = QPushButton('保存')
+        save_button.clicked.connect(self.save_account)
+        
+        cancel_button = QPushButton('キャンセル')
+        cancel_button.clicked.connect(self.reject)
+        
+        button_layout.addWidget(cancel_button)
+        button_layout.addWidget(save_button)
+        
+        layout.addLayout(button_layout)
+        
+        self.setLayout(layout)
+    
+    def save_account(self):
+        """口座を保存"""
+        try:
+            account_type_text = self.type_combo.currentText()
+            account_type = 'bank' if account_type_text == '銀行' else 'securities'
+            
+            account_name = self.account_name_input.text().strip()
+            if not account_name:
+                raise ValueError("口座名を入力してください")
+            
+            balance_text = self.balance_input.text().strip().replace(',', '')
+            if not balance_text:
+                raise ValueError("残高を入力してください")
+            
+            balance = float(balance_text)
+            if balance < 0:
+                raise ValueError("残高は0以上の値を入力してください")
+            
+            notes = self.notes_input.text().strip()
+            
+            today = QDate.currentDate().toString('yyyy-MM-dd')
+            
+            conn = sqlite3.connect('budget.db')
+            c = conn.cursor()
+            
+            # 資産データ挿入
+            c.execute('''
+                INSERT INTO assets (account_type, account_name, balance, last_updated, notes)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (account_type, account_name, balance, today, notes))
+            
+            asset_id = c.lastrowid
+            
+            # 履歴データも記録
+            c.execute('''
+                INSERT INTO asset_history (asset_id, record_date, balance)
+                VALUES (?, ?, ?)
+            ''', (asset_id, today, balance))
+            
+            conn.commit()
+            conn.close()
+            
+            QMessageBox.information(self, '成功', '口座を追加しました')
+            self.accept()
+            
+        except ValueError as e:
+            QMessageBox.warning(self, '入力エラー', str(e))
+        except Exception as e:
+            QMessageBox.critical(self, 'エラー', f'保存中にエラーが発生しました: {str(e)}')
+
+
+class EditAccountDialog(QDialog):
+    """口座編集ダイアログ"""
+    
+    def __init__(self, asset_id, parent=None):
+        super().__init__(parent)
+        self.asset_id = asset_id
+        self.setWindowTitle('口座編集')
+        self.setMinimumWidth(400)
+        self.initUI()
+        self.load_data()
+    
+    def initUI(self):
+        layout = QVBoxLayout()
+        
+        form_layout = QFormLayout()
+        
+        # 口座名
+        self.account_name_input = QLineEdit()
+        form_layout.addRow('口座名:', self.account_name_input)
+        
+        # 残高/評価額
+        self.balance_input = QLineEdit()
+        form_layout.addRow('残高/評価額 (円):', self.balance_input)
+        
+        # 備考
+        self.notes_input = QLineEdit()
+        form_layout.addRow('備考:', self.notes_input)
+        
+        layout.addLayout(form_layout)
+        
+        # ボタン
+        button_layout = QHBoxLayout()
+        
+        save_button = QPushButton('保存')
+        save_button.clicked.connect(self.save_changes)
+        
+        cancel_button = QPushButton('キャンセル')
+        cancel_button.clicked.connect(self.reject)
+        
+        button_layout.addWidget(cancel_button)
+        button_layout.addWidget(save_button)
+        
+        layout.addLayout(button_layout)
+        
+        self.setLayout(layout)
+    
+    def load_data(self):
+        """データを読み込む"""
+        conn = sqlite3.connect('budget.db')
+        c = conn.cursor()
+        
+        c.execute('''
+            SELECT account_name, balance, notes
+            FROM assets
+            WHERE id = ?
+        ''', (self.asset_id,))
+        
+        result = c.fetchone()
+        conn.close()
+        
+        if result:
+            account_name, balance, notes = result
+            self.account_name_input.setText(account_name)
+            self.balance_input.setText(str(balance))
+            self.notes_input.setText(notes or '')
+    
+    def save_changes(self):
+        """変更を保存"""
+        try:
+            account_name = self.account_name_input.text().strip()
+            if not account_name:
+                raise ValueError("口座名を入力してください")
+            
+            balance_text = self.balance_input.text().strip().replace(',', '')
+            if not balance_text:
+                raise ValueError("残高を入力してください")
+            
+            balance = float(balance_text)
+            if balance < 0:
+                raise ValueError("残高は0以上の値を入力してください")
+            
+            notes = self.notes_input.text().strip()
+            
+            today = QDate.currentDate().toString('yyyy-MM-dd')
+            
+            conn = sqlite3.connect('budget.db')
+            c = conn.cursor()
+            
+            # 資産データ更新
+            c.execute('''
+                UPDATE assets
+                SET account_name = ?, balance = ?, last_updated = ?, notes = ?
+                WHERE id = ?
+            ''', (account_name, balance, today, notes, self.asset_id))
+            
+            # 履歴データを記録
+            c.execute('''
+                INSERT INTO asset_history (asset_id, record_date, balance)
+                VALUES (?, ?, ?)
+            ''', (self.asset_id, today, balance))
+            
+            conn.commit()
+            conn.close()
+            
+            QMessageBox.information(self, '成功', '口座情報を更新しました')
+            self.accept()
+            
+        except ValueError as e:
+            QMessageBox.warning(self, '入力エラー', str(e))
+        except Exception as e:
+            QMessageBox.critical(self, 'エラー', f'保存中にエラーが発生しました: {str(e)}')
+
+
+class UpdateBalanceDialog(QDialog):
+    """残高一括更新ダイアログ"""
+    
+    def __init__(self, account_type, parent=None):
+        super().__init__(parent)
+        self.account_type = account_type
+        type_name = '銀行' if account_type == 'bank' else '証券'
+        self.setWindowTitle(f'{type_name}口座残高更新')
+        self.setMinimumWidth(600)
+        self.setMinimumHeight(400)
+        self.initUI()
+    
+    def initUI(self):
+        layout = QVBoxLayout()
+        
+        # 説明
+        type_name = '銀行' if self.account_type == 'bank' else '証券'
+        info_label = QLabel(f'<b>{type_name}口座の残高を一括で更新します</b>')
+        layout.addWidget(info_label)
+        
+        # 口座リストテーブル
+        self.accounts_table = QTableWidget(0, 4)
+        self.accounts_table.setHorizontalHeaderLabels([
+            '口座名', '現在の残高', '新しい残高', 'ID'
+        ])
+        self.accounts_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.accounts_table.setColumnHidden(3, True)  # IDを非表示
+        
+        layout.addWidget(self.accounts_table)
+        
+        # データ読み込み
+        self.load_accounts()
+        
+        # ボタン
+        button_layout = QHBoxLayout()
+        
+        save_button = QPushButton('一括更新')
+        save_button.clicked.connect(self.save_balances)
+        
+        cancel_button = QPushButton('キャンセル')
+        cancel_button.clicked.connect(self.reject)
+        
+        button_layout.addWidget(cancel_button)
+        button_layout.addWidget(save_button)
+        
+        layout.addLayout(button_layout)
+        
+        self.setLayout(layout)
+    
+    def load_accounts(self):
+        """口座データを読み込む"""
+        conn = sqlite3.connect('budget.db')
+        c = conn.cursor()
+        
+        c.execute('''
+            SELECT id, account_name, balance
+            FROM assets
+            WHERE account_type = ?
+            ORDER BY account_name
+        ''', (self.account_type,))
+        
+        accounts = c.fetchall()
+        conn.close()
+        
+        self.accounts_table.setRowCount(len(accounts))
+        
+        for row, (asset_id, account_name, balance) in enumerate(accounts):
+            self.accounts_table.setItem(row, 0, QTableWidgetItem(account_name))
+            self.accounts_table.setItem(row, 1, QTableWidgetItem(f"{balance:,.0f}円"))
+            
+            # 新しい残高入力欄
+            new_balance_input = QLineEdit()
+            new_balance_input.setText(str(balance))
+            new_balance_input.setPlaceholderText('新しい残高')
+            self.accounts_table.setCellWidget(row, 2, new_balance_input)
+            
+            # IDを保存
+            self.accounts_table.setItem(row, 3, QTableWidgetItem(str(asset_id)))
+    
+    def save_balances(self):
+        """残高を一括保存"""
+        try:
+            today = QDate.currentDate().toString('yyyy-MM-dd')
+            updates = []
+            
+            for row in range(self.accounts_table.rowCount()):
+                asset_id = int(self.accounts_table.item(row, 3).text())
+                new_balance_input = self.accounts_table.cellWidget(row, 2)
+                new_balance_text = new_balance_input.text().strip().replace(',', '')
+                
+                if new_balance_text:
+                    new_balance = float(new_balance_text)
+                    updates.append((asset_id, new_balance))
+            
+            if not updates:
+                QMessageBox.warning(self, '警告', '更新する残高を入力してください')
+                return
+            
+            conn = sqlite3.connect('budget.db')
+            c = conn.cursor()
+            
+            for asset_id, new_balance in updates:
+                # 資産データ更新
+                c.execute('''
+                    UPDATE assets
+                    SET balance = ?, last_updated = ?
+                    WHERE id = ?
+                ''', (new_balance, today, asset_id))
+                
+                # 履歴データ記録
+                c.execute('''
+                    INSERT INTO asset_history (asset_id, record_date, balance)
+                    VALUES (?, ?, ?)
+                ''', (asset_id, today, new_balance))
+            
+            conn.commit()
+            conn.close()
+            
+            type_name = '銀行' if self.account_type == 'bank' else '証券'
+            QMessageBox.information(self, '成功', f'{len(updates)}件の{type_name}口座を更新しました')
+            self.accept()
+            
+        except ValueError as e:
+            QMessageBox.warning(self, '入力エラー', '正しい数値を入力してください')
+        except Exception as e:
+            QMessageBox.critical(self, 'エラー', f'更新中にエラーが発生しました: {str(e)}')                                
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
