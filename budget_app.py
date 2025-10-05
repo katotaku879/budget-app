@@ -7846,6 +7846,8 @@ class AssetManagementWidget(BaseWidget):
     
     def initUI(self):
         layout = QVBoxLayout()
+
+    
         
         # ナビゲーションボタン
         layout.addLayout(self.button_layout)
@@ -7881,6 +7883,11 @@ class AssetManagementWidget(BaseWidget):
         self.history_tab = QWidget()
         self.setup_history_tab()
         self.tab_widget.addTab(self.history_tab, "📊 資産推移")
+
+        # タブ5: 資産構成（円グラフ）
+        self.composition_tab = QWidget()
+        self.setup_asset_composition_tab()
+        self.tab_widget.addTab(self.composition_tab, "🥧 資産構成")    
         
         layout.addWidget(self.tab_widget)
         
@@ -8109,6 +8116,10 @@ class AssetManagementWidget(BaseWidget):
         
         # 資産推移チャート更新
         self.update_history_chart()
+
+        # 資産構成円グラフ更新
+        if hasattr(self, 'composition_tab'):
+            self.update_asset_composition_charts()
     
     def update_assets_table(self, assets):
         """資産一覧テーブルを更新"""
@@ -8238,6 +8249,7 @@ class AssetManagementWidget(BaseWidget):
         if dialog.exec_() == QDialog.Accepted:
             self.load_assets()
     
+    
     def update_history_chart(self):
         """資産推移チャートを更新"""
         period = self.period_combo.currentText()
@@ -8308,6 +8320,262 @@ class AssetManagementWidget(BaseWidget):
         chart.legend().setAlignment(Qt.AlignBottom)
         
         self.history_chart_view.setChart(chart)
+
+    def setup_asset_composition_tab(self):
+        """資産構成タブのUI（円グラフ）"""
+        layout = QVBoxLayout()
+        
+        # タイトル
+        title_label = QLabel("<h2>💰 資産構成</h2>")
+        title_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title_label)
+        
+        # 統計情報カード
+        self.composition_stats_card = self.create_composition_stats_card()
+        layout.addWidget(self.composition_stats_card)
+        
+        # 円グラフエリア
+        chart_layout = QHBoxLayout()
+        
+        # メイン円グラフ（銀行 vs 証券）
+        self.main_pie_chart_view = QChartView()
+        self.main_pie_chart_view.setMinimumHeight(400)
+        chart_layout.addWidget(self.main_pie_chart_view)
+        
+        # 詳細円グラフ（口座別）
+        self.detailed_pie_chart_view = QChartView()
+        self.detailed_pie_chart_view.setMinimumHeight(400)
+        chart_layout.addWidget(self.detailed_pie_chart_view)
+        
+        layout.addLayout(chart_layout)
+        
+        self.composition_tab.setLayout(layout)
+
+    def create_composition_stats_card(self):
+        """資産構成統計情報カードを作成"""
+        card = QFrame()
+        card.setFrameShape(QFrame.StyledPanel)
+        card.setStyleSheet("""
+            QFrame {
+                background-color: #f8f9fa;
+                border: 1px solid #dee2e6;
+                border-radius: 10px;
+                padding: 15px;
+            }
+        """)
+        card.setMaximumHeight(120)
+        
+        card_layout = QVBoxLayout()
+        
+        # 統計情報を横に並べる
+        stats_layout = QHBoxLayout()
+        
+        # 銀行割合
+        self.bank_percentage_label = QLabel("🏦 銀行: 0%")
+        self.bank_percentage_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #28a745;")
+        
+        # 証券割合
+        self.securities_percentage_label = QLabel("📈 証券: 0%")
+        self.securities_percentage_label.setStyleSheet("font-size: 16px; font-weight: bold; color: #007bff;")
+        
+        # 最大口座
+        self.largest_account_label = QLabel("💎 最大口座: -")
+        self.largest_account_label.setStyleSheet("font-size: 14px; color: #6c757d;")
+        
+        # 口座数
+        self.account_count_label = QLabel("📊 口座数: 0")
+        self.account_count_label.setStyleSheet("font-size: 14px; color: #6c757d;")
+        
+        stats_layout.addWidget(self.bank_percentage_label)
+        stats_layout.addWidget(self.securities_percentage_label)
+        stats_layout.addStretch()
+        stats_layout.addWidget(self.largest_account_label)
+        stats_layout.addWidget(self.account_count_label)
+        
+        card_layout.addLayout(stats_layout)
+        card.setLayout(card_layout)
+        
+        return card
+
+    def update_asset_composition_charts(self):
+        """資産構成円グラフを更新"""
+        # データベースから資産データを取得
+        conn = sqlite3.connect('budget.db')
+        c = conn.cursor()
+        
+        # 全資産取得
+        c.execute('''
+            SELECT account_type, account_name, balance, notes
+            FROM assets
+            WHERE balance > 0
+            ORDER BY balance DESC
+        ''')
+        
+        assets = c.fetchall()
+        conn.close()
+        
+        if not assets:
+            # データがない場合の処理
+            self.show_empty_pie_charts()
+            return
+        
+        # 合計資産計算
+        total_assets = sum(asset[2] for asset in assets)
+        bank_total = sum(asset[2] for asset in assets if asset[0] == 'bank')
+        securities_total = sum(asset[2] for asset in assets if asset[0] == 'securities')
+        
+        # 統計情報更新
+        self.update_composition_stats(total_assets, bank_total, securities_total, assets)
+        
+        # メイン円グラフ（銀行 vs 証券）
+        self.create_main_composition_chart(bank_total, securities_total, total_assets)
+        
+        # 詳細円グラフ（口座別）
+        self.create_detailed_composition_chart(assets, total_assets)
+
+    def update_composition_stats(self, total_assets, bank_total, securities_total, assets):
+        """資産構成統計情報を更新"""
+        if total_assets > 0:
+            bank_percentage = (bank_total / total_assets) * 100
+            securities_percentage = (securities_total / total_assets) * 100
+            
+            self.bank_percentage_label.setText(f"🏦 銀行: {bank_percentage:.1f}%")
+            self.securities_percentage_label.setText(f"📈 証券: {securities_percentage:.1f}%")
+            
+            # 最大口座
+            if assets:
+                largest_account = assets[0]  # 残高順でソート済み
+                largest_name = largest_account[1]
+                largest_balance = largest_account[2]
+                largest_percentage = (largest_balance / total_assets) * 100
+                self.largest_account_label.setText(f"💎 最大口座: {largest_name} ({largest_percentage:.1f}%)")
+            
+            # 口座数
+            self.account_count_label.setText(f"📊 口座数: {len(assets)}件")
+        else:
+            self.bank_percentage_label.setText("🏦 銀行: 0%")
+            self.securities_percentage_label.setText("📈 証券: 0%")
+            self.largest_account_label.setText("💎 最大口座: -")
+            self.account_count_label.setText("📊 口座数: 0件")
+
+    def create_main_composition_chart(self, bank_total, securities_total, total_assets):
+        """メイン資産構成円グラフを作成（銀行 vs 証券）"""
+        chart = QChart()
+        chart.setAnimationOptions(QChart.SeriesAnimations)
+        
+        series = QPieSeries()
+        series.setHoleSize(0.35)  # ドーナツ型にする
+        
+        if total_assets > 0:
+            # 銀行のスライス
+            if bank_total > 0:
+                bank_slice = QPieSlice(f"🏦 銀行\n{bank_total:,.0f}円", bank_total)
+                bank_slice.setColor(QColor("#28a745"))  # 緑色
+                bank_slice.setLabelVisible(True)
+                bank_slice.setLabelPosition(QPieSlice.LabelOutside)
+                series.append(bank_slice)
+            
+            # 証券のスライス
+            if securities_total > 0:
+                securities_slice = QPieSlice(f"📈 証券\n{securities_total:,.0f}円", securities_total)
+                securities_slice.setColor(QColor("#007bff"))  # 青色
+                securities_slice.setLabelVisible(True)
+                securities_slice.setLabelPosition(QPieSlice.LabelOutside)
+                series.append(securities_slice)
+            
+            # パーセンテージ表示を有効化
+            for slice in series.slices():
+                percentage = slice.percentage() * 100
+                slice.setLabel(f"{slice.label()}\n{percentage:.1f}%")
+                
+                # ホバー効果
+                slice.setExploded(False)
+                slice.hovered.connect(lambda state, s=slice: s.setExploded(state))
+        
+        chart.addSeries(series)
+        chart.setTitle("資産配分（銀行 vs 証券）")
+        chart.legend().setVisible(True)
+        chart.legend().setAlignment(Qt.AlignRight)
+        
+        self.main_pie_chart_view.setChart(chart)
+
+    def create_detailed_composition_chart(self, assets, total_assets):
+        """詳細資産構成円グラフを作成（口座別）"""
+        chart = QChart()
+        chart.setAnimationOptions(QChart.SeriesAnimations)
+        
+        series = QPieSeries()
+        series.setHoleSize(0.35)  # ドーナツ型にする
+        
+        if total_assets > 0 and assets:
+            # 色のパレット
+            colors = [
+                "#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", 
+                "#FFEAA7", "#DDA0DD", "#98D8C8", "#F7DC6F",
+                "#BB8FCE", "#85C1E9", "#F8C471", "#82E0AA"
+            ]
+            
+            # 上位8口座まで表示（小さすぎる口座は「その他」にまとめる）
+            main_assets = assets[:8]
+            other_assets = assets[8:]
+            
+            color_index = 0
+            
+            for asset in main_assets:
+                account_type, account_name, balance, notes = asset
+                
+                # 口座タイプのアイコン
+                icon = "🏦" if account_type == 'bank' else "📈"
+                
+                # スライス作成
+                slice_label = f"{icon} {account_name}"
+                if notes and notes != account_name:
+                    slice_label += f"\n({notes})"
+                
+                account_slice = QPieSlice(slice_label, balance)
+                account_slice.setColor(QColor(colors[color_index % len(colors)]))
+                account_slice.setLabelVisible(True)
+                account_slice.setLabelPosition(QPieSlice.LabelOutside)
+                
+                # パーセンテージ追加
+                percentage = (balance / total_assets) * 100
+                account_slice.setLabel(f"{slice_label}\n{balance:,.0f}円\n{percentage:.1f}%")
+                
+                # ホバー効果
+                account_slice.hovered.connect(lambda state, s=account_slice: s.setExploded(state))
+                
+                series.append(account_slice)
+                color_index += 1
+            
+            # その他の口座をまとめる
+            if other_assets:
+                other_total = sum(asset[2] for asset in other_assets)
+                other_percentage = (other_total / total_assets) * 100
+                
+                other_slice = QPieSlice(f"💼 その他\n{other_total:,.0f}円\n{other_percentage:.1f}%", other_total)
+                other_slice.setColor(QColor("#BDC3C7"))  # グレー
+                other_slice.setLabelVisible(True)
+                other_slice.setLabelPosition(QPieSlice.LabelOutside)
+                
+                series.append(other_slice)
+        
+        chart.addSeries(series)
+        chart.setTitle("詳細資産配分（口座別）")
+        chart.legend().setVisible(False)  # ラベルが詳細なので凡例は非表示
+        
+        self.detailed_pie_chart_view.setChart(chart)
+
+    def show_empty_pie_charts(self):
+        """データがない場合の円グラフ表示"""
+        # メインチャート
+        main_chart = QChart()
+        main_chart.setTitle("資産データがありません")
+        self.main_pie_chart_view.setChart(main_chart)
+        
+        # 詳細チャート
+        detailed_chart = QChart()
+        detailed_chart.setTitle("資産データがありません")
+        self.detailed_pie_chart_view.setChart(detailed_chart)    
 
 
 class AddAccountDialog(QDialog):
