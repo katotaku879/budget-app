@@ -8485,12 +8485,22 @@ class AssetManagementWidget(BaseWidget):
             print(f"テストデータ作成エラー: {e}")
             return False
 
-    # 資産履歴データを手動で作成するためのメソッド
     def create_initial_asset_history(self):
-        """現在の資産データから初期履歴データを作成"""
+        """現在の資産データから初期履歴データを作成（重複チェック付き）"""
         try:
             conn = sqlite3.connect('budget.db')
             c = conn.cursor()
+            
+            today = datetime.now().strftime('%Y-%m-%d')
+            
+            # 今日の履歴データが既にあるかチェック
+            c.execute('SELECT COUNT(*) FROM asset_history WHERE record_date = ?', (today,))
+            existing_count = c.fetchone()[0]
+            
+            if existing_count > 0:
+                print(f"今日（{today}）の履歴データは既に存在します。スキップします。")
+                conn.close()
+                return
             
             # 既存の履歴データ数をチェック
             c.execute('SELECT COUNT(*) FROM asset_history')
@@ -8506,22 +8516,69 @@ class AssetManagementWidget(BaseWidget):
                 assets = c.fetchall()
                 
                 if assets:
-                    today = datetime.now().strftime('%Y-%m-%d')
-                    
                     # 各資産の現在の残高を履歴として追加
                     for asset_id, balance in assets:
                         c.execute('''
                             INSERT INTO asset_history (asset_id, record_date, balance)
                             VALUES (?, ?, ?)
                         ''', (asset_id, today, balance))
+                        print(f"  資産ID {asset_id} の履歴を作成: {balance:,.0f}円")
                     
                     conn.commit()
-                    print(f"初期資産履歴データを作成しました: {len(assets)}件")
-                
+                    print("履歴データ初期化完了")
+            
             conn.close()
             
         except Exception as e:
-            print(f"初期履歴データ作成エラー: {e}")        
+            print(f"履歴データ作成エラー: {e}")
+            try:
+                conn.close()
+            except:
+                pass
+
+    def record_daily_asset_history(self):
+        """日次の資産履歴を記録（重複チェック付き）"""
+        try:
+            conn = sqlite3.connect('budget.db')
+            c = conn.cursor()
+            
+            today = datetime.now().strftime('%Y-%m-%d')
+            
+            # 今日の履歴が既にあるかチェック
+            c.execute('SELECT COUNT(*) FROM asset_history WHERE record_date = ?', (today,))
+            existing_count = c.fetchone()[0]
+            
+            if existing_count > 0:
+                print(f"今日（{today}）の履歴は既に記録済みです")
+                conn.close()
+                return
+            
+            # 現在の資産データを取得
+            c.execute('''
+                SELECT id, balance
+                FROM assets
+                WHERE balance > 0
+            ''')
+            assets = c.fetchall()
+            
+            if assets:
+                for asset_id, balance in assets:
+                    c.execute('''
+                        INSERT INTO asset_history (asset_id, record_date, balance)
+                        VALUES (?, ?, ?)
+                    ''', (asset_id, today, balance))
+                
+                conn.commit()
+                print(f"日次履歴を記録しました（{len(assets)}件）")
+            
+            conn.close()
+            
+        except Exception as e:
+            print(f"日次履歴記録エラー: {e}")
+            try:
+                conn.close()
+            except:
+                pass    
 
     def setup_asset_composition_tab(self):
         """資産構成タブのUI（円グラフ）"""
