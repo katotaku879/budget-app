@@ -209,22 +209,35 @@ class BaseWidget(QWidget):
                 button.clicked.connect(lambda checked, w=widget: stacked_widget.setCurrentWidget(w))
 
 class YearMonthDialog(QDialog):
+    """年月選択ダイアログ"""
     def __init__(self, parent=None):
+        """YearMonthDialogの初期化メソッド。
+        ウィンドウタイトルを設定し、UIを構築します。
+        Args:
+            parent (QWidget, optional): 親ウィジェット。デフォルトはNone。"""
         super().__init__(parent)
         self.setWindowTitle('年月選択')
         self.initUI()
         
     def initUI(self):
+        """
+        ダイアログのUI要素（カレンダーとボタン）を配置します。
+        """
         layout = QVBoxLayout()
         
+        # 1. カレンダーウィジェットを配置
         self.calendar = QCalendarWidget()
         layout.addWidget(self.calendar)
         
+        # 2. OK/キャンセルボタンのレイアウト
         button_layout = QHBoxLayout()
         ok_button = QPushButton('OK')
         cancel_button = QPushButton('キャンセル')
         
+        # OKボタンがクリックされたらダイアログを accept (結果を返す)
         ok_button.clicked.connect(self.accept)
+
+        # キャンセルボタンがクリックされたらダイアログを reject (キャンセル)
         cancel_button.clicked.connect(self.reject)
         
         button_layout.addWidget(ok_button)
@@ -902,6 +915,7 @@ class BudgetApp(QMainWindow):
                 self.income_expense_widget.category_input.setCurrentIndex(index)
 
 class IncomeExpenseWidget(BaseWidget):
+    '''収入と支出を管理・表示するメインウィジェット'''
     def __init__(self, parent=None):
         super().__init__(parent)  # BaseWidget の初期化
         self.current_year, self.current_month = DateHelper.get_current_year_month()
@@ -939,46 +953,44 @@ class IncomeExpenseWidget(BaseWidget):
         summary_layout.addRow(expense_label, self.monthly_expense_label)
         summary_layout.addRow(balance_label, self.monthly_balance_label)
         
-        # 収入保存ボタンを追加
-        self.save_income_button = QPushButton('収入を保存')
-        self.save_income_button.clicked.connect(self.save_monthly_income)
-        summary_layout.addRow(self.save_income_button)
-        
-        self.monthly_income_input.textChanged.connect(self.calculate_monthly_balance)
+        # 収入入力ボタン
+        save_income_button = QPushButton('収入を保存')
+        save_income_button.clicked.connect(self.save_monthly_income)
         layout.addLayout(summary_layout)
+        layout.addWidget(save_income_button)
 
-        # 年月選択ボタン
-        self.year_month_button = QPushButton('年月選択')
-        self.year_month_button.clicked.connect(self.show_year_month_dialog)
-        layout.addWidget(self.year_month_button)
-
-        # 選択された年月の表示
-        self.selected_period_label = QLabel(
-            f'{self.current_year}年{self.current_month}月'
-        )
-        layout.addWidget(self.selected_period_label)
+        # 期間選択
+        year_month_layout = QHBoxLayout()
+        self.prev_month_button = QPushButton('◀ 前月')
+        self.next_month_button = QPushButton('次月 ▶')
+        self.period_label = QLabel(f'{self.current_year}年{self.current_month}月')
+        
+        year_month_layout.addWidget(self.prev_month_button)
+        year_month_layout.addWidget(self.period_label)
+        year_month_layout.addWidget(self.next_month_button)
+        year_month_layout.addStretch()
+        
+        self.prev_month_button.clicked.connect(self.show_prev_month)
+        self.next_month_button.clicked.connect(self.show_next_month)
+        
+        layout.addLayout(year_month_layout)
 
         # 入力フォーム
         form_layout = QFormLayout()
 
         self.date_input = QDateEdit()
-        self.date_input.setCalendarPopup(True)
-        self.date_input.setDisplayFormat("yyyy-MM-dd")
         self.date_input.setDate(QDate.currentDate())
+        self.date_input.setCalendarPopup(True)
         form_layout.addRow('日付:', self.date_input)
 
-        # 修正後: データベースからカテゴリを動的に取得
-        # 正しい修正: categories変数の定義と使用
+        # カテゴリ選択（動的に読み込み）
         self.category_input = QComboBox()
         try:
-            # カテゴリをデータベースから取得
             conn = sqlite3.connect('budget.db')
             c = conn.cursor()
             c.execute('SELECT name FROM categories ORDER BY sort_order')
             db_categories = [row[0] for row in c.fetchall()]
             conn.close()
-            
-            # 取得したカテゴリをコンボボックスに追加
             self.category_input.addItems(db_categories)
             
         except Exception as e:
@@ -1003,6 +1015,39 @@ class IncomeExpenseWidget(BaseWidget):
         self.add_button = QPushButton('追加')
         self.add_button.clicked.connect(self.add_expense)
         layout.addWidget(self.add_button)
+
+        # ========== シンプルな表示設定エリア ==========
+        display_group = QGroupBox('表示設定')
+        display_layout = QHBoxLayout()
+        
+        # 並び替えオプション
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItems(['日付順（新しい順）', '日付順（古い順）', 'カテゴリ別', '金額順（高い順）', '金額順（安い順）'])
+        
+        # カテゴリフィルター
+        self.filter_combo = QComboBox()
+        self.filter_combo.addItem('全てのカテゴリ')
+        
+        # 表示件数
+        self.limit_combo = QComboBox()
+        self.limit_combo.addItems(['50件', '100件', '200件', '全て'])
+        
+        display_layout.addWidget(QLabel('並び替え:'))
+        display_layout.addWidget(self.sort_combo)
+        display_layout.addWidget(QLabel('カテゴリ:'))
+        display_layout.addWidget(self.filter_combo)
+        display_layout.addWidget(QLabel('表示件数:'))
+        display_layout.addWidget(self.limit_combo)
+        display_layout.addStretch()
+        
+        display_group.setLayout(display_layout)
+        layout.addWidget(display_group)
+
+        # カテゴリをロードしてイベント接続
+        self.load_categories_for_filter()
+        self.sort_combo.currentIndexChanged.connect(self.update_expense_table_display)
+        self.filter_combo.currentIndexChanged.connect(self.update_expense_table_display)
+        self.limit_combo.currentIndexChanged.connect(self.update_expense_table_display)
 
         # テーブル
         self.expense_table = QTableWidget(0, 5)
@@ -1270,67 +1315,24 @@ class IncomeExpenseWidget(BaseWidget):
     # QTableWidgetItem の代わりに QComboBox を使用するように変更
 
     def update_table(self):
-        self.is_updating = True
-        df = self.get_expenses_as_dataframe()
-        
-        if not df.empty:
-            df['date'] = pd.to_datetime(df['date'])
-            monthly_df = df[
-                (df['date'].dt.year == self.current_year) & 
-                (df['date'].dt.month == self.current_month)
-            ]
-            monthly_df = monthly_df.sort_values('date')
+        """テーブル更新（新システム専用）"""
+        try:
+            print(f"=== update_table（新システム専用）===")
+            
+            # 古いシステムを完全無効化
+            # self.is_updating = True
+            # 既存のpandas処理をすべてコメントアウト
+            
+            # 新システムのみ実行
+            if hasattr(self, 'load_current_month_expenses'):
+                self.load_current_month_expenses()
+            else:
+                print("新システムが利用できません")
+                
+        except Exception as e:
+            print(f"update_table エラー: {e}")
 
-            self.expense_table.setRowCount(len(monthly_df))
-            
-            # データベースからカテゴリリストを取得
-            try:
-                conn = sqlite3.connect('budget.db')
-                c = conn.cursor()
-                c.execute('SELECT name FROM categories ORDER BY sort_order')
-                categories = [row[0] for row in c.fetchall()]
-                conn.close()
-            except Exception as e:
-                print(f"カテゴリ取得エラー: {e}")
-                categories = ['食費', '交通費', '娯楽', 'その他', '住宅', 
-                            '水道光熱費', '美容', '通信費', '日用品', '健康', '教育']
-            
-            for row_idx, (_, row) in enumerate(monthly_df.iterrows()):
-                self.expense_table.setItem(
-                    row_idx, 0, 
-                    EditableTableItem(str(row['id']), editable=False)
-                )
-                self.expense_table.setItem(
-                    row_idx, 1, 
-                    EditableTableItem(str(row['date'].strftime('%Y-%m-%d')))
-                )
-                
-                # カテゴリセルにコンボボックスを設定
-                category_combo = QComboBox()
-                category_combo.addItems(categories)
-                current_index = category_combo.findText(str(row['category']))
-                if current_index >= 0:
-                    category_combo.setCurrentIndex(current_index)
-                
-                # コンボボックスの変更イベントを接続
-                category_combo.currentIndexChanged.connect(
-                    lambda idx, r=row_idx: self.on_category_combo_changed(r)
-                )
-                
-                self.expense_table.setCellWidget(row_idx, 2, category_combo)
-                
-                amount_item = EditableTableItem(f"{row['amount']:,.0f}")
-                amount_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)  # 右寄せ
-                self.expense_table.setItem(row_idx, 3, amount_item)
-                
-                self.expense_table.setItem(
-                    row_idx, 4, 
-                    EditableTableItem(str(row['description']))
-                )
-        else:
-            self.expense_table.setRowCount(0)
-            
-        self.is_updating = False
+        
 
     # 新しいメソッドを追加: カテゴリコンボボックスの変更イベントハンドラ
     def on_category_combo_changed(self, row):
@@ -1360,19 +1362,37 @@ class IncomeExpenseWidget(BaseWidget):
             column = item.column()
             
             try:
-                expense_id = int(self.expense_table.item(row, 0).text())
-                date = self.expense_table.item(row, 1).text()
+                # Noneチェックを追加
+                id_item = self.expense_table.item(row, 0)
+                if id_item is None:
+                    print(f"警告: 行{row}のIDセルがNoneです")
+                    return
+                expense_id = int(id_item.text())
                 
-                # カテゴリの処理（コンボボックスかテキストか判定）
+                date_item = self.expense_table.item(row, 1)
+                if date_item is None:
+                    print(f"警告: 行{row}の日付セルがNoneです")
+                    return
+                date = date_item.text()
+                
+                # カテゴリの処理(コンボボックスかテキストか判定)
                 category_widget = self.expense_table.cellWidget(row, 2)
                 if category_widget and isinstance(category_widget, QComboBox):
                     category = category_widget.currentText()
                 else:
                     category_item = self.expense_table.item(row, 2)
+                    if category_item is None:
+                        print(f"警告: 行{row}のカテゴリセルがNoneです")
+                        return
                     category = category_item.text() if category_item else ''
                 
                 # 金額の処理を改善
-                amount_text = self.expense_table.item(row, 3).text()
+                amount_item = self.expense_table.item(row, 3)
+                if amount_item is None:
+                    print(f"警告: 行{row}の金額セルがNoneです")
+                    return
+                amount_text = amount_item.text()
+                
                 # カンマ、空白、円記号、マイナス記号を処理
                 amount_text = amount_text.replace(',', '').replace(' ', '').replace('円', '').replace('−', '-').replace('－', '-')
                 
@@ -1382,13 +1402,17 @@ class IncomeExpenseWidget(BaseWidget):
                 
                 amount = float(amount_text)
                 
-                # 金額が負数でない場合は絶対値を使用（支出として記録）
+                # 金額が負数でない場合は絶対値を使用(支出として記録)
                 if amount < 0:
                     amount = abs(amount)
                 
-                description = self.expense_table.item(row, 4).text()
+                description_item = self.expense_table.item(row, 4)
+                if description_item is None:
+                    print(f"警告: 行{row}の説明セルがNoneです")
+                    return
+                description = description_item.text()
                 
-                # データベース更新（共通関数を使用）
+                # データベース更新(共通関数を使用)
                 execute_query('''
                     UPDATE expenses 
                     SET date = ?, category = ?, amount = ?, description = ?
@@ -1397,12 +1421,13 @@ class IncomeExpenseWidget(BaseWidget):
                 
                 print(f"データ更新成功: ID={expense_id}, 金額={amount}")  # デバッグ用
                 
-                # 表示を更新（金額編集時は少し待つ）
+                # 表示を更新(金額編集時は少し待つ)
                 if column == 3:  # 金額列の場合
                     QApplication.processEvents()  # UI更新を待つ
                 
                 self.update_monthly_expense()
-                self.update_goal_progress()  # 目標進捗も更新
+                if hasattr(self, 'update_goal_progress'):
+                    self.update_goal_progress()  # 目標進捗も更新
                 
             except ValueError as e:
                 print(f"値エラー: {e}")
@@ -1410,6 +1435,8 @@ class IncomeExpenseWidget(BaseWidget):
                 self.update_table()
             except Exception as e:
                 print(f"予期しないエラー: {e}")
+                import traceback
+                traceback.print_exc()
                 QMessageBox.warning(self, '警告', '変更の保存中にエラーが発生しました。')
                 self.update_table()
 
@@ -1678,8 +1705,343 @@ class IncomeExpenseWidget(BaseWidget):
         dialog = CreditCardImportDialog(self)
         if dialog.exec_() == QDialog.Accepted:
             self.update_table()
-            self.update_monthly_expense()     
-    
+            self.update_monthly_expense()    
+
+    def load_categories_for_filter(self):
+        """フィルター用のカテゴリを読み込む"""
+        try:
+            conn = sqlite3.connect('budget.db')
+            c = conn.cursor()
+            c.execute('SELECT name FROM categories ORDER BY sort_order')
+            categories = [row[0] for row in c.fetchall()]
+            conn.close()
+            
+            for category in categories:
+                self.filter_combo.addItem(category)
+        except Exception as e:
+            print(f"カテゴリ読み込みエラー: {e}")
+
+    def load_current_month_expenses(self):
+        """現在の月の支出データを読み込む（デバッグ強化版）"""
+        try:
+            print(f"=== データ読み込み開始: {self.current_year}年{self.current_month}月 ===")
+            
+            conn = sqlite3.connect('budget.db')
+            c = conn.cursor()
+            
+            # まず全データを確認
+            c.execute('SELECT COUNT(*) FROM expenses')
+            total_count = c.fetchone()[0]
+            print(f"expenses テーブルの総レコード数: {total_count}")
+            
+            # 今月のデータを確認
+            c.execute('''
+                SELECT COUNT(*) FROM expenses
+                WHERE strftime('%Y', date) = ? AND strftime('%m', date) = ?
+            ''', (str(self.current_year), f"{self.current_month:02d}"))
+            
+            month_count = c.fetchone()[0]
+            print(f"今月（{self.current_year}年{self.current_month}月）のレコード数: {month_count}")
+            
+            # 実際のデータを取得
+            c.execute('''
+                SELECT id, date, category, amount, description
+                FROM expenses
+                WHERE strftime('%Y', date) = ? AND strftime('%m', date) = ?
+                ORDER BY date DESC, id DESC
+            ''', (str(self.current_year), f"{self.current_month:02d}"))
+            
+            self.current_expense_data = c.fetchall()
+            conn.close()
+            
+            print(f"実際に読み込まれたデータ: {len(self.current_expense_data)}件")
+            
+            # データ内容を詳細表示
+            if self.current_expense_data:
+                print("=== 読み込まれたデータの詳細 ===")
+                for i, row in enumerate(self.current_expense_data):
+                    print(f"  {i+1}. ID:{row[0]}, 日付:{row[1]}, カテゴリ:{row[2]}, 金額:{row[3]}, 説明:{row[4]}")
+            else:
+                print("=== データが0件です ===")
+                # 他の月のデータがあるか確認
+                conn = sqlite3.connect('budget.db')
+                c = conn.cursor()
+                c.execute('SELECT DISTINCT strftime("%Y-%m", date) FROM expenses ORDER BY date DESC LIMIT 5')
+                other_months = c.fetchall()
+                conn.close()
+                print("他の月のデータ:")
+                for month in other_months:
+                    print(f"  {month[0]}")
+            
+            # 表示更新
+            self.update_expense_table_display()
+            
+        except Exception as e:
+            print(f"load_current_month_expenses エラー: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def update_expense_table_display(self):
+        """支出テーブルの表示を更新(安全版)"""
+        try:
+            print("=== update_expense_table_display 開始(安全版) ===")
+            
+            # is_updatingフラグを設定
+            self.is_updating = True
+            
+            # 全ての必要なウィジェットが存在します
+            print("全ての必要なウィジェットが存在します")
+            
+            # データ読み込み開始
+            print(f"=== データ読み込み開始: {self.current_year}年{self.current_month}月 ===")
+            
+            # データベースから支出データを取得
+            query = '''
+                SELECT id, date, category, amount, description
+                FROM expenses
+                WHERE strftime('%Y', date) = ? AND strftime('%m', date) = ?
+            '''
+            
+            month_str = f'{self.current_month:02d}'
+            all_data = execute_query(query, (str(self.current_year), month_str), fetch_all=True)
+            
+            print(f"expensesテーブルの総レコード数: {len(all_data) if all_data else 0}")
+            print(f"今月({self.current_year}年{self.current_month}月)のレコード数: {len(all_data) if all_data else 0}")
+            
+            if all_data:
+                print(f"実際に読み込まれたデータ: {len(all_data)}件")
+                print("=== 読み込まれたデータの詳細 ===")
+                for i, row in enumerate(all_data[:5]):  # 最初の5件だけ表示
+                    print(f"  {i+1}. ID:{row[0]}, 日付:{row[1]}, カテゴリ:{row[2]}, 金額:{row[3]}, 説明:{row[4]}")
+            
+            # フィルタリング処理
+            selected_category = self.filter_combo.currentText()
+            print(f"選択されたカテゴリ: '{selected_category}'")
+            
+            filtered_data = all_data
+            if selected_category != '全てのカテゴリ':
+                filtered_data = [row for row in all_data if row[2] == selected_category]
+                print(f"カテゴリフィルタ後のデータ件数: {len(filtered_data)}")
+            
+            # 並び替えオプション
+            sort_option = self.sort_combo.currentText()
+            print(f"並び替えオプション: '{sort_option}'")
+
+            if sort_option == '日付順（新しい順）':  # 全角括弧に変更
+                filtered_data = sorted(filtered_data, key=lambda x: x[1], reverse=True)
+                print("日付順(新しい順)でソート完了")
+            elif sort_option == '日付順（古い順）':  # 全角括弧に変更
+                filtered_data = sorted(filtered_data, key=lambda x: x[1])
+                print("日付順(古い順)でソート完了")
+            elif sort_option == 'カテゴリ別':
+                self.is_updating = False
+                self.display_expenses_grouped_by_category(filtered_data)
+                print("=== update_expense_table_display 完了(カテゴリ別表示) ===")
+                return
+            elif sort_option == '金額順（高い順）':  # 全角括弧に変更
+                filtered_data = sorted(filtered_data, key=lambda x: x[3], reverse=True)
+                print("金額順(高い順)でソート完了")
+            elif sort_option == '金額順（安い順）':  # 全角括弧に変更
+                filtered_data = sorted(filtered_data, key=lambda x: x[3])
+                print("金額順(安い順)でソート完了")
+            else:
+                print(f"⚠️ 不明な並び替えオプション: '{sort_option}'")
+            
+            # 表示件数制限
+            limit_text = self.limit_combo.currentText()
+            print(f"表示件数: '{limit_text}'")
+            
+            if limit_text != '全て':
+                limit = int(limit_text.replace('件', ''))
+                filtered_data = filtered_data[:limit]
+            
+            print(f"最終データ件数: {len(filtered_data)}")
+            
+            # ここからが重要な修正部分
+            # テーブルに安全にデータを設定
+            if filtered_data:
+                self.expense_table.setRowCount(len(filtered_data))
+                
+                # **データベースからカテゴリリストを取得**
+                try:
+                    conn = sqlite3.connect('budget.db')
+                    c = conn.cursor()
+                    c.execute('SELECT name FROM categories ORDER BY sort_order')
+                    categories = [row[0] for row in c.fetchall()]
+                    conn.close()
+                except Exception as e:
+                    print(f"カテゴリ取得エラー: {e}")
+                    categories = ['食費', '交通費', '娯楽', 'その他', '住宅', 
+                                '水道光熱費', '美容', '通信費', '日用品', '健康', '教育']
+                
+                print("=== テーブルにデータを設定中 ===")
+                for row, row_data in enumerate(filtered_data):
+                    if not row_data or len(row_data) < 5:
+                        print(f"行{row}: データが不完全です")
+                        continue
+                        
+                    try:
+                        expense_id, date, category, amount, description = row_data
+                        
+                        # 安全に文字列に変換
+                        safe_id = str(expense_id or '')
+                        safe_date = str(date or '')
+                        safe_category = str(category or '')
+                        safe_amount = float(amount or 0)
+                        safe_description = str(description or '')
+                        
+                        # IDカラム
+                        self.expense_table.setItem(row, 0, QTableWidgetItem(safe_id))
+                        
+                        # 日付カラム
+                        self.expense_table.setItem(row, 1, QTableWidgetItem(safe_date))
+                        
+                        # **カテゴリ列にコンボボックスを設定**
+                        category_combo = QComboBox()
+                        category_combo.addItems(categories)
+                        current_index = category_combo.findText(safe_category)
+                        if current_index >= 0:
+                            category_combo.setCurrentIndex(current_index)
+                        
+                        # コンボボックスの変更イベントを接続
+                        category_combo.currentIndexChanged.connect(
+                            lambda idx, r=row: self.on_category_combo_changed(r)
+                        )
+                        
+                        self.expense_table.setCellWidget(row, 2, category_combo)
+                        
+                        # 金額カラム
+                        amount_item = QTableWidgetItem(f"{safe_amount:,.0f}円")
+                        amount_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                        self.expense_table.setItem(row, 3, amount_item)
+                        
+                        # 説明カラム
+                        self.expense_table.setItem(row, 4, QTableWidgetItem(safe_description))
+                        
+                        if row < 5:  # 最初の5行だけログ出力
+                            print(f"行{row}設定: {safe_date} {safe_category} {safe_amount} {safe_description}")
+                            
+                    except Exception as e:
+                        print(f"行{row}のデータ設定エラー: {e}")
+                        print(f"問題のデータ: {row_data}")
+                        continue
+                
+                print(f"=== テーブル設定完了: {len(filtered_data)}行 ===")
+            else:
+                self.expense_table.setRowCount(0)
+                print("表示するデータがありません")
+            
+            self.is_updating = False
+            print("=== update_expense_table_display 完了(安全版) ===")
+            
+        except Exception as e:
+            self.is_updating = False
+            print(f"update_expense_table_display 全体エラー: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def display_expenses_grouped_by_category(self, data):
+        """カテゴリ別にグループ化して表示"""
+        grouped_data = {}
+        for row in data:
+            category = row[2]
+            if category not in grouped_data:
+                grouped_data[category] = []
+            grouped_data[category].append(row)
+        
+        total_rows = sum(len(items) + 1 for items in grouped_data.values())
+        self.expense_table.setRowCount(total_rows)
+        
+        current_row = 0
+        for category, items in grouped_data.items():
+            category_total = sum(item[3] for item in items)
+            header_item = QTableWidgetItem(f"【{category}】 ({len(items)}件、合計: {category_total:,.0f}円)")
+            header_item.setBackground(QColor("#E3F2FD"))
+            header_item.setFont(QFont("", weight=QFont.Bold))
+            
+            self.expense_table.setItem(current_row, 0, QTableWidgetItem(""))
+            self.expense_table.setItem(current_row, 1, QTableWidgetItem(""))
+            self.expense_table.setItem(current_row, 2, header_item)
+            self.expense_table.setItem(current_row, 3, QTableWidgetItem(""))
+            self.expense_table.setItem(current_row, 4, QTableWidgetItem(""))
+            self.expense_table.setSpan(current_row, 1, 1, 4)
+            current_row += 1
+            
+            for row_data in items:
+                exp_id, date, category, amount, description = row_data
+                self.expense_table.setItem(current_row, 0, QTableWidgetItem(str(exp_id)))
+                self.expense_table.setItem(current_row, 1, QTableWidgetItem(date))
+                self.expense_table.setItem(current_row, 2, QTableWidgetItem(category))
+                self.expense_table.setItem(current_row, 3, QTableWidgetItem(f"{amount:,.0f}円"))
+                self.expense_table.setItem(current_row, 4, QTableWidgetItem(description))
+                current_row += 1
+
+    def display_expenses_normal_table(self, data):
+        """通常のテーブル表示（デバッグ強化版）"""
+        try:
+            print(f"=== display_expenses_normal_table 開始 ===")
+            print(f"受け取ったデータ件数: {len(data) if data else 0}")
+            
+            if self.expense_table is None:
+                print("❌ expense_table が None です")
+                return
+                
+            print(f"テーブルの行数を設定: {len(data)}行")
+            
+            # スパンをクリア
+            self.expense_table.clearSpans()
+            
+            if not data:
+                print("データが空のため、テーブルを空にします")
+                return
+            
+            for row, row_data in enumerate(data):
+                if not row_data or len(row_data) < 5:
+                    print(f"❌ 行 {row}: データが不完全です - {row_data}")
+                    continue
+                    
+                try:
+                    exp_id, date, category, amount, description = row_data
+                    
+                    print(f"行 {row} 設定中: ID:{exp_id}, 日付:{date}, カテゴリ:{category}, 金額:{amount}")
+                    
+                    # 安全にアイテムを設定
+                    self.expense_table.setItem(row, 0, QTableWidgetItem(str(exp_id or '')))
+                    self.expense_table.setItem(row, 1, QTableWidgetItem(str(date or '')))
+                    self.expense_table.setItem(row, 2, QTableWidgetItem(str(category or '')))
+                    self.expense_table.setItem(row, 3, QTableWidgetItem(f"{amount or 0:,.0f}円"))
+                    self.expense_table.setItem(row, 4, QTableWidgetItem(str(description or '')))
+                    
+                    print(f"✅ 行 {row} 設定完了")
+                    
+                except Exception as e:
+                    print(f"❌ 行 {row} の設定エラー: {e}")
+                    
+            print(f"=== display_expenses_normal_table 完了 ===")
+                    
+        except Exception as e:
+            print(f"❌ display_expenses_normal_table エラー: {e}")
+         
+    def show_prev_month(self):
+        self.current_year, self.current_month = DateHelper.get_prev_month(self.current_year, self.current_month)
+        self.period_label.setText(f'{self.current_year}年{self.current_month}月')
+
+        self.load_monthly_income()
+        self.update_table()
+        self.update_monthly_expense()
+
+        
+
+    def show_next_month(self):
+        self.current_year, self.current_month = DateHelper.get_next_month(self.current_year, self.current_month)
+        self.period_label.setText(f'{self.current_year}年{self.current_month}月')
+        
+        self.load_monthly_income()
+        self.update_table()
+        self.update_monthly_expense()
+        # カテゴリ表示のデータ更新
+        if hasattr(self, 'load_current_month_expenses'):
+            self.load_current_month_expenses()
 
 class BreakdownWidget(BaseWidget):
     def __init__(self, parent=None):
