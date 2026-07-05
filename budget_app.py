@@ -24,7 +24,7 @@ from PyQt5.QtWidgets import (
     QAction, QFileDialog, QDialogButtonBox, QProgressBar, QProgressDialog,
     
     # レイアウト調整/その他
-    QSizePolicy, QSpacerItem, QColorDialog, QInputDialog
+    QSizePolicy, QSpacerItem, QInputDialog
 )
 
 # PyQt5 コアとグラフィック（修正版）
@@ -43,7 +43,6 @@ import sqlite3
 import pandas as pd
 import os
 import sys
-import time
 import io
 import requests
 from datetime import datetime, timedelta
@@ -212,20 +211,6 @@ class BaseWidget(QWidget):
         for button in buttons:
             self.button_layout.addWidget(button)
             
-    def connect_navigation_buttons(self, stacked_widget):
-        """ボタンのクリックイベントを接続"""
-        widgets = {
-            'income_expense': self.income_expense_button,
-            'breakdown': self.breakdown_button,
-            'monthly_report': self.monthly_report_button,
-            'goal_management': self.goal_management_button,
-            'diagnostic_report': self.diagnostic_report_button
-        }
-        
-        for name, button in widgets.items():
-            widget = getattr(self.parent, f"{name}_widget", None)
-            if widget:
-                button.clicked.connect(lambda checked, w=widget: stacked_widget.setCurrentWidget(w))
 
 class YearMonthDialog(QDialog):
     """年月選択ダイアログ"""
@@ -438,78 +423,6 @@ class BudgetApp(QMainWindow):
             # 親クラスのcloseEventを呼び出す
             super().closeEvent(event)
 
-
-    def initUI(self):
-        self.setWindowTitle('家計簿アプリ')
-        self.setGeometry(100, 100, 800, 600)
-        
-        # メインウィジェットとしてQStackedWidgetを使用
-        self.stacked_widget = QStackedWidget()
-        
-        # 各画面のウィジェットを作成
-        self.income_expense_widget = IncomeExpenseWidget(self)
-        self.breakdown_widget = BreakdownWidget(self)
-        self.monthly_report_widget = MonthlyReportWidget(self)
-        
-        # StackedWidgetに各画面を追加
-        self.stacked_widget.addWidget(self.income_expense_widget)
-        self.stacked_widget.addWidget(self.breakdown_widget)
-        self.stacked_widget.addWidget(self.monthly_report_widget)
-        
-        # ボタンのクリックイベントを接続
-        self.income_expense_widget.income_expense_button.clicked.connect(
-            lambda: self.stacked_widget.setCurrentWidget(self.income_expense_widget)
-        )
-        self.income_expense_widget.breakdown_button.clicked.connect(
-            lambda: self.switch_to_breakdown()
-        )
-        self.income_expense_widget.monthly_report_button.clicked.connect(
-            lambda: self.stacked_widget.setCurrentWidget(self.monthly_report_widget)
-        )
-        
-        self.breakdown_widget.income_expense_button.clicked.connect(
-            lambda: self.stacked_widget.setCurrentWidget(self.income_expense_widget)
-        )
-        self.breakdown_widget.breakdown_button.clicked.connect(
-            lambda: self.stacked_widget.setCurrentWidget(self.breakdown_widget)
-        )
-        self.breakdown_widget.monthly_report_button.clicked.connect(
-            lambda: self.stacked_widget.setCurrentWidget(self.monthly_report_widget)
-        )
-        
-        self.monthly_report_widget.income_expense_button.clicked.connect(
-            lambda: self.stacked_widget.setCurrentWidget(self.income_expense_widget)
-        )
-        self.monthly_report_widget.breakdown_button.clicked.connect(
-            lambda: self.stacked_widget.setCurrentWidget(self.breakdown_widget)
-        )
-        self.monthly_report_widget.monthly_report_button.clicked.connect(
-            lambda: self.stacked_widget.setCurrentWidget(self.monthly_report_widget)
-        )
-        
-        self.setCentralWidget(self.stacked_widget)
-
-        # メニューバーを追加
-        menubar = self.menuBar()
-        file_menu = menubar.addMenu('ファイル')
-        
-        # バックアップメニュー
-        backup_menu = file_menu.addMenu('バックアップ')
-        
-        # 新規バックアップ作成
-        create_backup_action = QAction('バックアップを作成', self)
-        create_backup_action.triggered.connect(self.create_backup)
-        backup_menu.addAction(create_backup_action)
-        
-        # バックアップ管理
-        manage_backup_action = QAction('バックアップを管理', self)
-        manage_backup_action.triggered.connect(self.show_backup_manager)
-        backup_menu.addAction(manage_backup_action)
-        
-        # バックアップ設定
-        backup_settings_action = QAction('バックアップ設定', self)
-        backup_settings_action.triggered.connect(self.show_backup_settings)
-        backup_menu.addAction(backup_settings_action)
 
     def switch_to_breakdown(self):
         self.breakdown_widget.update_display()
@@ -837,18 +750,7 @@ class BudgetApp(QMainWindow):
     def show_category_management(self):
         """カテゴリ管理ダイアログを表示"""
         dialog = CategoryManagementDialog(self)
-        if dialog.exec_() == QDialog.Accepted:
-            # カテゴリが更新された場合、各ウィジェットのカテゴリリストを更新
-            self.update_all_category_lists()
-
-    def update_all_category_lists(self):
-        """全てのウィジェットのカテゴリリストを更新"""
-        # データベースから最新のカテゴリリストを取得
-        conn = sqlite3.connect('budget.db')
-        c = conn.cursor()
-        c.execute('SELECT name FROM categories ORDER BY sort_order')
-        categories = [row[0] for row in c.fetchall()]
-        conn.close()
+        dialog.exec_()
 
     def update_goal_data_across_widgets(self):
         """目標データが更新された際に各ウィジェットの表示を更新する"""
