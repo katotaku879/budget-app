@@ -54,20 +54,31 @@ def get_db_connection():
     return sqlite3.connect('budget.db')
 
 def execute_query(query, params=(), fetch_one=False, fetch_all=False):
-    """SQLクエリを実行し、必要に応じて結果を取得"""
+    """SQLクエリを実行し、必要に応じて結果を取得
+
+    try/finally で囲むことで、SQL実行中にエラーが起きても
+    必ず rollback（書きかけの変更を取り消し）と close（接続を閉じる）が
+    行われる。閉じ忘れた接続はDBのロックを握り続け、
+    後続の操作が「database is locked」で失敗する原因になる。
+    """
     conn = get_db_connection()
-    c = conn.cursor()
-    c.execute(query, params)
-    
-    result = None
-    if fetch_one:
-        result = c.fetchone()
-    elif fetch_all:
-        result = c.fetchall()
-        
-    conn.commit()
-    conn.close()
-    return result
+    try:
+        c = conn.cursor()
+        c.execute(query, params)
+
+        result = None
+        if fetch_one:
+            result = c.fetchone()
+        elif fetch_all:
+            result = c.fetchall()
+
+        conn.commit()
+        return result
+    except Exception:
+        conn.rollback()  # 途中まで実行した変更をなかったことにする
+        raise            # エラー自体は呼び出し側にそのまま伝える（既存のexcept処理を活かすため）
+    finally:
+        conn.close()     # 成功・失敗にかかわらず必ず接続を閉じる
 
 def get_categories():
     """DBからカテゴリ名リストを取得（sort_order順）"""
@@ -77,19 +88,25 @@ def get_categories():
     return ['食費', '交通費', '娯楽', 'その他', '住宅', '水道光熱費', '美容', '通信費', '日用品', '健康', '教育']
 
 def execute_many(query, param_list):
-    """複数のクエリを一括実行"""
+    """複数のクエリを一括実行（エラー時はrollback、接続は必ず閉じる）"""
     conn = get_db_connection()
-    c = conn.cursor()
-    c.executemany(query, param_list)
-    conn.commit()
-    conn.close()
+    try:
+        c = conn.cursor()
+        c.executemany(query, param_list)
+        conn.commit()
+    except Exception:
+        conn.rollback()  # 一括実行の途中で失敗したら全部取り消す（半端な取込を防ぐ）
+        raise
+    finally:
+        conn.close()
 
 def fetch_df(query, params=()):
-    """SQLクエリを実行し、結果をPandasのDataFrameとして取得"""
+    """SQLクエリを実行し、結果をPandasのDataFrameとして取得（接続は必ず閉じる）"""
     conn = get_db_connection()
-    df = pd.read_sql_query(query, conn, params=params)
-    conn.close()
-    return df
+    try:
+        return pd.read_sql_query(query, conn, params=params)
+    finally:
+        conn.close()  # 読み取り専用なのでrollback不要だが、closeは必ず行う
 
 # 年月処理の共通クラス
 class DateHelper:
@@ -332,21 +349,29 @@ class RecurringExpenseDialog(QDialog):
             payment_day = self.payment_day_input.value()
             
             conn = sqlite3.connect('budget.db')
-            c = conn.cursor()
-            c.execute('''
-                INSERT INTO recurring_expenses 
-                (category, amount, description, payment_day)
-                VALUES (?, ?, ?, ?)
-            ''', (category, amount, description, payment_day))
-            conn.commit()
-            conn.close()
-            
+            try:
+                c = conn.cursor()
+                c.execute('''
+                    INSERT INTO recurring_expenses
+                    (category, amount, description, payment_day)
+                    VALUES (?, ?, ?, ?)
+                ''', (category, amount, description, payment_day))
+                conn.commit()
+            except Exception:
+                conn.rollback()  # 保存に失敗したら書きかけを取り消す
+                raise            # 下のexceptでユーザーに通知する
+            finally:
+                conn.close()     # 成功・失敗にかかわらず必ず接続を閉じる
+
             self.load_recurring_expenses()
             self.amount_input.clear()
             self.description_input.clear()
-            
+
         except ValueError as e:
             QMessageBox.warning(self, '警告', str(e))
+        except Exception as e:
+            # DBエラーなど入力ミス以外の失敗もユーザーに知らせる
+            QMessageBox.critical(self, 'エラー', f'定期支払いの保存に失敗しました: {e}')
             
     def delete_recurring_expense(self):
         """選択された定期支払いを削除"""
@@ -368,15 +393,21 @@ class RecurringExpenseDialog(QDialog):
             payment_day = int(self.expense_table.item(row, 3).text())
             
             conn = sqlite3.connect('budget.db')
-            c = conn.cursor()
-            c.execute('''
-                DELETE FROM recurring_expenses 
-                WHERE category = ? AND amount = ? AND payment_day = ?
-            ''', (category, amount, payment_day))
-            conn.commit()
-            conn.close()
-            
-            self.load_recurring_expenses()                  
+            try:
+                c = conn.cursor()
+                c.execute('''
+                    DELETE FROM recurring_expenses
+                    WHERE category = ? AND amount = ? AND payment_day = ?
+                ''', (category, amount, payment_day))
+                conn.commit()
+            except Exception as e:
+                conn.rollback()  # 削除に失敗したら取り消す
+                QMessageBox.critical(self, 'エラー', f'定期支払いの削除に失敗しました: {e}')
+                return
+            finally:
+                conn.close()     # 必ず接続を閉じる
+
+            self.load_recurring_expenses()
 
 class BudgetApp(QMainWindow):
     def __init__(self):
@@ -5089,14 +5120,21 @@ class CategoryManagementDialog(QDialog):
         
         # データベースで順序を入れ替え
         conn = sqlite3.connect('budget.db')
-        c = conn.cursor()
-        
-        c.execute('UPDATE categories SET sort_order = ? WHERE id = ?', (target_order, current_id))
-        c.execute('UPDATE categories SET sort_order = ? WHERE id = ?', (current_order, target_id))
-        
-        conn.commit()
-        conn.close()
-        
+        try:
+            c = conn.cursor()
+
+            c.execute('UPDATE categories SET sort_order = ? WHERE id = ?', (target_order, current_id))
+            c.execute('UPDATE categories SET sort_order = ? WHERE id = ?', (current_order, target_id))
+
+            # 2つのUPDATEが両方成功したときだけ確定する
+            conn.commit()
+        except Exception as e:
+            conn.rollback()  # 片方だけ入れ替わった中途半端な状態を防ぐ
+            QMessageBox.critical(self, 'エラー', f'カテゴリの並び替えに失敗しました: {e}')
+            return
+        finally:
+            conn.close()     # 必ず接続を閉じる
+
         # テーブル表示を更新
         self.load_categories()
         
@@ -5807,40 +5845,44 @@ class CreditCardImportDialog(QDialog):
         duplicate_count = 0
         failed_count = 0  # 取込に失敗した行数（黙って欠落させないためカウントする）
 
-        for item in data:
-            date = item['date']
-            category = item['category']
-            amount = abs(item['amount'])  # 支出なので絶対値を使用
-            prefix = self.current_format.get('description_prefix', 'クレジットカード: ')
-            description = f"{prefix}{item['description']}"
-            
-            # 重複チェック
-            if self.duplicate_check.isChecked():
-                c.execute('''
-                    SELECT id FROM expenses
-                    WHERE date = ? AND category = ? AND amount = ? AND description = ?
-                ''', (date, category, amount, description))
-                
-                if c.fetchone():
-                    duplicate_count += 1
-                    continue
-            
-            # データベースに追加
-            try:
-                c.execute('''
-                    INSERT INTO expenses (date, category, amount, description)
-                    VALUES (?, ?, ?, ?)
-                ''', (date, category, amount, description))
-                
-                imported_count += 1
-                
-            except Exception as e:
-                print(f"行の挿入中にエラー: {e}")
-                failed_count += 1  # 失敗を記録して次の行へ
-                continue
+        # try/finally で囲み、途中で何が起きても接続を必ず閉じる
+        # （閉じ忘れはDBロックの原因になり、後続の操作が失敗しやすくなる）
+        try:
+            for item in data:
+                date = item['date']
+                category = item['category']
+                amount = abs(item['amount'])  # 支出なので絶対値を使用
+                prefix = self.current_format.get('description_prefix', 'クレジットカード: ')
+                description = f"{prefix}{item['description']}"
 
-        conn.commit()
-        conn.close()
+                # 重複チェック
+                if self.duplicate_check.isChecked():
+                    c.execute('''
+                        SELECT id FROM expenses
+                        WHERE date = ? AND category = ? AND amount = ? AND description = ?
+                    ''', (date, category, amount, description))
+
+                    if c.fetchone():
+                        duplicate_count += 1
+                        continue
+
+                # データベースに追加
+                try:
+                    c.execute('''
+                        INSERT INTO expenses (date, category, amount, description)
+                        VALUES (?, ?, ?, ?)
+                    ''', (date, category, amount, description))
+
+                    imported_count += 1
+
+                except Exception as e:
+                    print(f"行の挿入中にエラー: {e}")
+                    failed_count += 1  # 失敗を記録して次の行へ
+                    continue
+
+            conn.commit()
+        finally:
+            conn.close()
 
         if duplicate_count > 0:
             QMessageBox.information(
@@ -5862,18 +5904,25 @@ class CreditCardImportDialog(QDialog):
     # インポート履歴の保存
     def save_import_history(self, file_name, format_name, record_count):
         conn = sqlite3.connect('budget.db')
-        c = conn.cursor()
-        
-        import_date = QDate.currentDate().toString('yyyy-MM-dd')
-        
-        c.execute('''
-            INSERT INTO credit_card_imports 
-            (import_date, file_name, format_name, record_count)
-            VALUES (?, ?, ?, ?)
-        ''', (import_date, file_name, format_name, record_count))
-        
-        conn.commit()
-        conn.close() 
+        try:
+            c = conn.cursor()
+
+            import_date = QDate.currentDate().toString('yyyy-MM-dd')
+
+            c.execute('''
+                INSERT INTO credit_card_imports
+                (import_date, file_name, format_name, record_count)
+                VALUES (?, ?, ?, ?)
+            ''', (import_date, file_name, format_name, record_count))
+
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            # 履歴の保存は補助機能なので、失敗しても取込自体は成功している。
+            # ダイアログは出さずログだけ残す
+            print(f"インポート履歴の保存に失敗: {e}")
+        finally:
+            conn.close()  # 必ず接続を閉じる
 
     def clear_all_category_mappings(self):
         """カテゴリマッピングをすべて削除する"""
@@ -6481,8 +6530,9 @@ class PasmoImportDialog(QDialog):
         if reply != QMessageBox.Yes:
             return
 
+        # 接続はtryの外で開き、finallyで必ず閉じる（閉じ忘れ防止）
+        conn = sqlite3.connect('budget.db')
         try:
-            conn = sqlite3.connect('budget.db')
             c = conn.cursor()
 
             c.execute('''
@@ -6499,8 +6549,8 @@ class PasmoImportDialog(QDialog):
                 VALUES (?, ?, ?, ?)
             ''', (import_date, file_name, 'モバイルPASMO(一括)', 1))
 
+            # 支出と履歴の両方が成功したときだけ確定する
             conn.commit()
-            conn.close()
 
             QMessageBox.information(
                 self, '取り込み完了',
@@ -6509,7 +6559,10 @@ class PasmoImportDialog(QDialog):
             self.accept()
 
         except Exception as e:
+            conn.rollback()  # 途中まで書き込んだ分を取り消す
             QMessageBox.critical(self, 'エラー', f'取り込み処理に失敗しました:\n{str(e)}')
+        finally:
+            conn.close()     # 成功・失敗にかかわらず必ず接続を閉じる
 
     def _execute_individual_import(self):
         """個別取り込み: 各明細を個別に登録"""
@@ -6535,8 +6588,9 @@ class PasmoImportDialog(QDialog):
         if reply != QMessageBox.Yes:
             return
 
+        # 接続はtryの外で開き、finallyで必ず閉じる（閉じ忘れ防止）
+        conn = sqlite3.connect('budget.db')
         try:
-            conn = sqlite3.connect('budget.db')
             c = conn.cursor()
             imported_count = 0
             duplicate_count = 0
@@ -6574,7 +6628,6 @@ class PasmoImportDialog(QDialog):
                 VALUES (?, ?, ?, ?)
             ''', (import_date, file_name, 'モバイルPASMO', imported_count))
             conn.commit()
-            conn.close()
 
             if duplicate_count > 0:
                 QMessageBox.information(
@@ -6589,7 +6642,10 @@ class PasmoImportDialog(QDialog):
             self.accept()
 
         except Exception as e:
+            conn.rollback()  # 途中まで書き込んだ分を取り消す
             QMessageBox.critical(self, 'エラー', f'取り込み処理に失敗しました:\n{str(e)}')
+        finally:
+            conn.close()     # 成功・失敗にかかわらず必ず接続を閉じる
 
 
 class ComprehensiveAnalysisWidget(BaseWidget):
@@ -8450,28 +8506,34 @@ class AddAccountDialog(QDialog):
             today = QDate.currentDate().toString('yyyy-MM-dd')
             
             conn = sqlite3.connect('budget.db')
-            c = conn.cursor()
-            
-            # 資産データ挿入
-            c.execute('''
-                INSERT INTO assets (account_type, account_name, balance, last_updated, notes)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (account_type, account_name, balance, today, notes))
-            
-            asset_id = c.lastrowid
-            
-            # 履歴データも記録
-            c.execute('''
-                INSERT INTO asset_history (asset_id, record_date, balance)
-                VALUES (?, ?, ?)
-            ''', (asset_id, today, balance))
-            
-            conn.commit()
-            conn.close()
-            
+            try:
+                c = conn.cursor()
+
+                # 資産データ挿入
+                c.execute('''
+                    INSERT INTO assets (account_type, account_name, balance, last_updated, notes)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (account_type, account_name, balance, today, notes))
+
+                asset_id = c.lastrowid
+
+                # 履歴データも記録
+                c.execute('''
+                    INSERT INTO asset_history (asset_id, record_date, balance)
+                    VALUES (?, ?, ?)
+                ''', (asset_id, today, balance))
+
+                # 口座と履歴の両方が成功したときだけ確定する
+                conn.commit()
+            except Exception:
+                conn.rollback()  # 口座だけ登録され履歴が無い中途半端な状態を防ぐ
+                raise            # 下のexceptでユーザーに通知する
+            finally:
+                conn.close()     # 必ず接続を閉じる
+
             QMessageBox.information(self, '成功', '口座を追加しました')
             self.accept()
-            
+
         except ValueError as e:
             QMessageBox.warning(self, '入力エラー', str(e))
         except Exception as e:
@@ -8564,24 +8626,30 @@ class EditAccountDialog(QDialog):
             today = QDate.currentDate().toString('yyyy-MM-dd')
             
             conn = sqlite3.connect('budget.db')
-            c = conn.cursor()
-            
-            # 資産データ更新
-            c.execute('''
-                UPDATE assets
-                SET account_name = ?, balance = ?, last_updated = ?, notes = ?
-                WHERE id = ?
-            ''', (account_name, balance, today, notes, self.asset_id))
-            
-            # 履歴データを記録
-            c.execute('''
-                INSERT INTO asset_history (asset_id, record_date, balance)
-                VALUES (?, ?, ?)
-            ''', (self.asset_id, today, balance))
-            
-            conn.commit()
-            conn.close()
-            
+            try:
+                c = conn.cursor()
+
+                # 資産データ更新
+                c.execute('''
+                    UPDATE assets
+                    SET account_name = ?, balance = ?, last_updated = ?, notes = ?
+                    WHERE id = ?
+                ''', (account_name, balance, today, notes, self.asset_id))
+
+                # 履歴データを記録
+                c.execute('''
+                    INSERT INTO asset_history (asset_id, record_date, balance)
+                    VALUES (?, ?, ?)
+                ''', (self.asset_id, today, balance))
+
+                # 更新と履歴の両方が成功したときだけ確定する
+                conn.commit()
+            except Exception:
+                conn.rollback()  # 中途半端な更新を防ぐ
+                raise            # 下のexceptでユーザーに通知する
+            finally:
+                conn.close()     # 必ず接続を閉じる
+
             QMessageBox.information(self, '成功', '口座情報を更新しました')
             self.accept()
             
@@ -8690,25 +8758,31 @@ class UpdateBalanceDialog(QDialog):
                 return
             
             conn = sqlite3.connect('budget.db')
-            c = conn.cursor()
-            
-            for asset_id, new_balance in updates:
-                # 資産データ更新
-                c.execute('''
-                    UPDATE assets
-                    SET balance = ?, last_updated = ?
-                    WHERE id = ?
-                ''', (new_balance, today, asset_id))
-                
-                # 履歴データ記録
-                c.execute('''
-                    INSERT INTO asset_history (asset_id, record_date, balance)
-                    VALUES (?, ?, ?)
-                ''', (asset_id, today, new_balance))
-            
-            conn.commit()
-            conn.close()
-            
+            try:
+                c = conn.cursor()
+
+                for asset_id, new_balance in updates:
+                    # 資産データ更新
+                    c.execute('''
+                        UPDATE assets
+                        SET balance = ?, last_updated = ?
+                        WHERE id = ?
+                    ''', (new_balance, today, asset_id))
+
+                    # 履歴データ記録
+                    c.execute('''
+                        INSERT INTO asset_history (asset_id, record_date, balance)
+                        VALUES (?, ?, ?)
+                    ''', (asset_id, today, new_balance))
+
+                # 全口座の更新が成功したときだけ確定する
+                conn.commit()
+            except Exception:
+                conn.rollback()  # 一部の口座だけ更新された中途半端な状態を防ぐ
+                raise            # 下のexceptでユーザーに通知する
+            finally:
+                conn.close()     # 必ず接続を閉じる
+
             type_name = '銀行' if self.account_type == 'bank' else '証券'
             QMessageBox.information(self, '成功', f'{len(updates)}件の{type_name}口座を更新しました')
             self.accept()

@@ -122,41 +122,50 @@ def import_rakuten_csv(csv_path, db_path='budget.db'):
         df['category'] = df['store'].apply(classify_category)
         
         # データベースに挿入
+        # try/finally で囲み、途中でエラーが起きても必ず接続を閉じる。
+        # 閉じ忘れるとDBのロックが残り、GUIアプリ側の操作が
+        # 「database is locked」で失敗する原因になる
         conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-        
-        inserted_count = 0
-        duplicate_count = 0
-        
-        for _, row in df.iterrows():
-            date_str = row['date'].strftime('%Y-%m-%d')
-            store = row['store']
-            amount = row['amount']
-            category = row['category']
-            
-            # 重複チェック（同じ日付・店舗・金額の組み合わせ）
-            cursor.execute('''
-                SELECT COUNT(*) FROM expenses 
-                WHERE date=? AND description LIKE ? AND amount=?
-            ''', (date_str, f"%{store}%", amount))
-            
-            if cursor.fetchone()[0] == 0:
-                # 新規レコードを挿入
+        try:
+            cursor = conn.cursor()
+
+            inserted_count = 0
+            duplicate_count = 0
+
+            for _, row in df.iterrows():
+                date_str = row['date'].strftime('%Y-%m-%d')
+                store = row['store']
+                amount = row['amount']
+                category = row['category']
+
+                # 重複チェック（同じ日付・店舗・金額の組み合わせ）
                 cursor.execute('''
-                    INSERT INTO expenses (date, category, amount, description)
-                    VALUES (?, ?, ?, ?)
-                ''', (
-                    date_str,
-                    category,
-                    amount,
-                    f"クレジットカード: {store}"
-                ))
-                inserted_count += 1
-            else:
-                duplicate_count += 1
-        
-        conn.commit()
-        conn.close()
+                    SELECT COUNT(*) FROM expenses
+                    WHERE date=? AND description LIKE ? AND amount=?
+                ''', (date_str, f"%{store}%", amount))
+
+                if cursor.fetchone()[0] == 0:
+                    # 新規レコードを挿入
+                    cursor.execute('''
+                        INSERT INTO expenses (date, category, amount, description)
+                        VALUES (?, ?, ?, ?)
+                    ''', (
+                        date_str,
+                        category,
+                        amount,
+                        f"クレジットカード: {store}"
+                    ))
+                    inserted_count += 1
+                else:
+                    duplicate_count += 1
+
+            # 全行の処理が成功したときだけ確定する
+            conn.commit()
+        except Exception:
+            conn.rollback()  # 途中まで挿入した分を取り消す（半端な取込を防ぐ）
+            raise            # エラー内容は下のexceptでprintされる
+        finally:
+            conn.close()     # 成功・失敗にかかわらず必ず接続を閉じる
         
         print(f"✅ インポート完了!")
         print(f"   新規登録: {inserted_count}件")
