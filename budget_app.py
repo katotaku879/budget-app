@@ -29,12 +29,13 @@ from PyQt5.QtWidgets import (
 
 # PyQt5 コアとグラフィック（修正版）
 from PyQt5.QtCore import Qt, QDate, QMargins, QPointF, QDateTime
-from PyQt5.QtGui import QFont, QColor, QIcon, QPen
+from PyQt5.QtGui import QFont, QColor, QIcon, QPen, QBrush
 
 # PyQt5 チャート関連（修正版）
 from PyQt5.QtChart import (
-    QChart, QChartView, QPieSeries, QPieSlice, QBarSeries, 
-    QBarSet, QValueAxis, QBarCategoryAxis, QLineSeries, QDateTimeAxis
+    QChart, QChartView, QPieSeries, QPieSlice, QBarSeries,
+    QBarSet, QValueAxis, QBarCategoryAxis, QLineSeries, QDateTimeAxis,
+    QAreaSeries, QCategoryAxis
 )
 
 # その他のライブラリ
@@ -45,6 +46,8 @@ import os
 import sys
 import shutil
 import time
+import io
+import requests
 from datetime import datetime, timedelta
 
 # データベースユーティリティ関数
@@ -67,6 +70,13 @@ def execute_query(query, params=(), fetch_one=False, fetch_all=False):
     conn.commit()
     conn.close()
     return result
+
+def get_categories():
+    """DBからカテゴリ名リストを取得（sort_order順）"""
+    result = execute_query('SELECT name FROM categories ORDER BY sort_order', fetch_all=True)
+    if result:
+        return [row[0] for row in result]
+    return ['食費', '交通費', '娯楽', 'その他', '住宅', '水道光熱費', '美容', '通信費', '日用品', '健康', '教育']
 
 def execute_many(query, param_list):
     """複数のクエリを一括実行"""
@@ -169,8 +179,6 @@ class BaseWidget(QWidget):
         self.breakdown_button = QPushButton('収支内訳')
         self.monthly_report_button = QPushButton('月次収支')
         self.goal_management_button = QPushButton('目標管理')
-        self.savings_goal_button = QPushButton('貯金目標')
-        self.ai_advisor_button = QPushButton('AIアドバイザー')
         self.diagnostic_report_button = QPushButton('診断レポート')
         self.comprehensive_analysis_button = QPushButton('全データ分析')  # ←追加
         self.asset_management_button = QPushButton('資産管理')  # ←追加
@@ -181,8 +189,6 @@ class BaseWidget(QWidget):
             self.breakdown_button,
             self.monthly_report_button,
             self.goal_management_button,
-            self.savings_goal_button,
-            self.ai_advisor_button,
             self.diagnostic_report_button,
             self.comprehensive_analysis_button,
             self.asset_management_button
@@ -198,8 +204,6 @@ class BaseWidget(QWidget):
             'breakdown': self.breakdown_button,
             'monthly_report': self.monthly_report_button,
             'goal_management': self.goal_management_button,
-            'savings_goal': self.savings_goal_button,
-            'ai_advisor': self.ai_advisor_button,
             'diagnostic_report': self.diagnostic_report_button
         }
         
@@ -273,11 +277,8 @@ class RecurringExpenseDialog(QDialog):
         form_layout = QFormLayout()
         
         self.category_combo = QComboBox()
-        self.category_combo.addItems([
-            '食費', '交通費', '娯楽', 'その他', '住宅', 
-            '水道光熱費', '美容', '通信費', '日用品', '健康', '教育'
-        ])
-        
+        self.category_combo.addItems(get_categories())
+
         self.amount_input = QLineEdit()
         self.description_input = QLineEdit()
         self.payment_day_input = QSpinBox()
@@ -390,11 +391,6 @@ class BudgetApp(QMainWindow):
         
         self.enhanced_init_ui()  # 新しいメソッドを呼び出す
         
-        # 定期支払いの処理をアプリケーション起動時にも実行
-        widget = self.income_expense_widget
-        if hasattr(widget, 'process_recurring_expenses'):
-            widget.process_recurring_expenses()
-
         # 目標データを読み込む（追加）
         if hasattr(self, 'goal_management_widget'):
             self.goal_management_widget.load_goals()    
@@ -600,9 +596,13 @@ class BudgetApp(QMainWindow):
         ''')
         
         execute_query('''
-            CREATE INDEX IF NOT EXISTS idx_asset_history_asset_id 
+            CREATE INDEX IF NOT EXISTS idx_asset_history_asset_id
             ON asset_history(asset_id)
         ''')
+
+        # 支出テーブルのインデックス（検索・フィルター高速化）
+        execute_query('CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(date)')
+        execute_query('CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category)')
 
         # デフォルトカテゴリの追加（まだデータがない場合）
         category_count = execute_query('SELECT COUNT(*) FROM categories', fetch_one=True)
@@ -625,33 +625,6 @@ class BudgetApp(QMainWindow):
                 default_categories
             )
 
-    # 貯金目標テーブルの作成
-        execute_query('''
-            CREATE TABLE IF NOT EXISTS savings_goals (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                target_amount REAL NOT NULL,
-                current_amount REAL DEFAULT 0,
-                start_date TEXT NOT NULL,
-                target_date TEXT,
-                description TEXT,
-                color TEXT DEFAULT '#4CAF50',
-                is_completed BOOLEAN DEFAULT 0
-            )
-        ''')
-        
-        # 貯金履歴テーブルの作成
-        execute_query('''
-            CREATE TABLE IF NOT EXISTS savings_transactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                goal_id INTEGER NOT NULL,
-                amount REAL NOT NULL,
-                date TEXT NOT NULL,
-                description TEXT,
-                FOREIGN KEY (goal_id) REFERENCES savings_goals(id)
-            )
-        ''')
-
     def enhanced_init_ui(self):
         self.setWindowTitle('家計簿アプリ')
         self.setGeometry(100, 100, 900, 700)
@@ -666,8 +639,6 @@ class BudgetApp(QMainWindow):
             'monthly_report': MonthlyReportWidget,
             'goal_management': GoalManagementWidget,
             'diagnostic_report': DiagnosticReportWidget,
-            'savings_goal': SavingsGoalWidget,
-            'ai_advisor': AIExpenseAdvisorWidget,
             'comprehensive_analysis': ComprehensiveAnalysisWidget,
             'asset_management': AssetManagementWidget  # ←この行があるか確認
         }
@@ -684,8 +655,6 @@ class BudgetApp(QMainWindow):
             'monthly_report': self.monthly_report_widget,
             'goal_management': self.goal_management_widget,
             'diagnostic_report': self.diagnostic_report_widget,
-            'savings_goal': self.savings_goal_widget,
-            'ai_advisor': self.ai_advisor_widget,
             'comprehensive_analysis': self.comprehensive_analysis_widget  # ←追加
         }
 
@@ -746,12 +715,10 @@ class BudgetApp(QMainWindow):
             'monthly_report': self.monthly_report_widget,
             'goal_management': self.goal_management_widget,
             'diagnostic_report': self.diagnostic_report_widget,
-            'savings_goal': self.savings_goal_widget,
-            'ai_advisor': self.ai_advisor_widget,
             'comprehensive_analysis': self.comprehensive_analysis_widget,
-            'asset_management': self.asset_management_widget  
+            'asset_management': self.asset_management_widget
         }
-        
+
         # ボタン名とターゲットウィジェットのマッピング
         button_targets = {
             'income_expense_button': self.income_expense_widget,
@@ -759,10 +726,8 @@ class BudgetApp(QMainWindow):
             'monthly_report_button': self.monthly_report_widget,
             'goal_management_button': self.goal_management_widget,
             'diagnostic_report_button': self.diagnostic_report_widget,
-            'savings_goal_button': self.savings_goal_widget,
-            'ai_advisor_button': self.ai_advisor_widget,
             'comprehensive_analysis_button': self.comprehensive_analysis_widget,
-            'asset_management_button': self.asset_management_widget  
+            'asset_management_button': self.asset_management_widget
         }
         
         # 各ウィジェットについて処理
@@ -795,9 +760,9 @@ class BudgetApp(QMainWindow):
                     button_layout = widget.layout().itemAt(0).layout()
                     if button_layout is not None:
                         button_layout.addWidget(button)
-                except:
+                except Exception as e:
                     # 失敗した場合は警告を出すだけにする
-                    print(f"Warning: Could not add button to {type(widget).__name__}")
+                    print(f"Warning: Could not add button to {type(widget).__name__}: {e}")
         except Exception as e:
             print(f"Error adding button to {type(widget).__name__}: {e}")    
 
@@ -922,7 +887,6 @@ class IncomeExpenseWidget(BaseWidget):
         self.initUI()
         self.load_monthly_income()      # ←この行を追加
         self.update_monthly_expense()
-        self.process_recurring_expenses()
 
     def initUI(self):
         layout = QVBoxLayout()
@@ -996,11 +960,7 @@ class IncomeExpenseWidget(BaseWidget):
         except Exception as e:
             # エラー時はデフォルトカテゴリを使用
             print(f"カテゴリ取得エラー: {e}")
-            default_categories = [
-                '食費', '交通費', '娯楽', 'その他', '住宅', 
-                '水道光熱費', '美容', '通信費', '日用品', '健康', '教育'
-            ]
-            self.category_input.addItems(default_categories)
+            self.category_input.addItems(get_categories())
         form_layout.addRow('カテゴリ:', self.category_input)
 
         self.amount_input = QLineEdit()
@@ -1018,20 +978,48 @@ class IncomeExpenseWidget(BaseWidget):
 
         # ========== シンプルな表示設定エリア ==========
         display_group = QGroupBox('表示設定')
+        display_main_layout = QVBoxLayout()
+
+        # 1行目: 検索バー
+        search_layout = QHBoxLayout()
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText('キーワードで検索（説明文・カテゴリ）')
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.textChanged.connect(self.update_expense_table_display)
+
+        self.amount_min_input = QLineEdit()
+        self.amount_min_input.setPlaceholderText('最小金額')
+        self.amount_min_input.setFixedWidth(100)
+        self.amount_min_input.editingFinished.connect(self.update_expense_table_display)
+
+        self.amount_max_input = QLineEdit()
+        self.amount_max_input.setPlaceholderText('最大金額')
+        self.amount_max_input.setFixedWidth(100)
+        self.amount_max_input.editingFinished.connect(self.update_expense_table_display)
+
+        search_layout.addWidget(QLabel('検索:'))
+        search_layout.addWidget(self.search_input)
+        search_layout.addWidget(QLabel('金額:'))
+        search_layout.addWidget(self.amount_min_input)
+        search_layout.addWidget(QLabel('〜'))
+        search_layout.addWidget(self.amount_max_input)
+        display_main_layout.addLayout(search_layout)
+
+        # 2行目: 既存の並び替え・フィルター
         display_layout = QHBoxLayout()
-        
+
         # 並び替えオプション
         self.sort_combo = QComboBox()
         self.sort_combo.addItems(['日付順（新しい順）', '日付順（古い順）', 'カテゴリ別', '金額順（高い順）', '金額順（安い順）'])
-        
+
         # カテゴリフィルター
         self.filter_combo = QComboBox()
         self.filter_combo.addItem('全てのカテゴリ')
-        
+
         # 表示件数
         self.limit_combo = QComboBox()
         self.limit_combo.addItems(['50件', '100件', '200件', '全て'])
-        
+
         display_layout.addWidget(QLabel('並び替え:'))
         display_layout.addWidget(self.sort_combo)
         display_layout.addWidget(QLabel('カテゴリ:'))
@@ -1039,9 +1027,16 @@ class IncomeExpenseWidget(BaseWidget):
         display_layout.addWidget(QLabel('表示件数:'))
         display_layout.addWidget(self.limit_combo)
         display_layout.addStretch()
-        
-        display_group.setLayout(display_layout)
+        display_main_layout.addLayout(display_layout)
+
+        display_group.setLayout(display_main_layout)
         layout.addWidget(display_group)
+
+        # カテゴリ別合計表示ラベル
+        self.category_total_label = QLabel('')
+        self.category_total_label.setFont(QFont('', 11, QFont.Bold))
+        self.category_total_label.setStyleSheet('color: #1565C0; padding: 5px; background-color: #E3F2FD; border-radius: 4px;')
+        layout.addWidget(self.category_total_label)
 
         # カテゴリをロードしてイベント接続
         self.load_categories_for_filter()
@@ -1082,6 +1077,31 @@ class IncomeExpenseWidget(BaseWidget):
         self.credit_card_import_button.clicked.connect(self.show_credit_card_import_dialog)
         layout.addWidget(self.credit_card_import_button)
 
+        # 楽天PAY明細取込ボタン
+        self.rakuten_pay_import_button = QPushButton('楽天PAY明細取込')
+        self.rakuten_pay_import_button.clicked.connect(self.show_rakuten_pay_import_dialog)
+        layout.addWidget(self.rakuten_pay_import_button)
+
+        # PayPay明細取込ボタン
+        self.paypay_import_button = QPushButton('PayPay明細取込')
+        self.paypay_import_button.clicked.connect(self.show_paypay_import_dialog)
+        layout.addWidget(self.paypay_import_button)
+
+        # PASMO明細取込ボタン
+        self.pasmo_import_button = QPushButton('PASMO明細取込')
+        self.pasmo_import_button.clicked.connect(self.show_pasmo_import_dialog)
+        layout.addWidget(self.pasmo_import_button)
+
+        # CSVエクスポートボタン
+        self.export_button = QPushButton('CSVエクスポート')
+        self.export_button.clicked.connect(self.export_to_excel)
+        layout.addWidget(self.export_button)
+
+        # PDFエクスポートボタン（全データ）
+        self.pdf_export_button = QPushButton('PDF全データエクスポート')
+        self.pdf_export_button.clicked.connect(self.export_all_to_pdf)
+        layout.addWidget(self.pdf_export_button)
+
         self.setLayout(layout)
         self.update_table()
         self.load_monthly_income()  # 初期収入データの読み込み
@@ -1107,7 +1127,13 @@ class IncomeExpenseWidget(BaseWidget):
         self.expense_progress = QProgressBar()
         goal_progress_layout.addWidget(self.expense_limit_label)
         goal_progress_layout.addWidget(self.expense_progress)
-        
+
+        # カテゴリ別予算アラート表示エリア
+        self.budget_alert_label = QLabel('')
+        self.budget_alert_label.setWordWrap(True)
+        self.budget_alert_label.setVisible(False)
+        goal_progress_layout.addWidget(self.budget_alert_label)
+
         # レイアウトに追加
         self.layout().addWidget(self.goal_progress_frame)
         
@@ -1193,9 +1219,55 @@ class IncomeExpenseWidget(BaseWidget):
                 self.expense_progress.setValue(0)
                 self.savings_goal_label.setText('貯蓄目標: 設定なし')
                 self.expense_limit_label.setText('支出上限: 設定なし')
-            
+
+            # カテゴリ別予算アラートの更新
+            self.update_budget_alerts()
+
         except Exception as e:
-            print(f"目標進捗表示の更新中にエラー: {e}") 
+            print(f"目標進捗表示の更新中にエラー: {e}")
+
+    def update_budget_alerts(self):
+        """カテゴリ別予算の超過アラートを表示"""
+        try:
+            # カテゴリ別目標を取得
+            goals = execute_query('''
+                SELECT category, goal_amount FROM category_goals
+                WHERE year = ? AND month = ?
+            ''', (self.current_year, self.current_month), fetch_all=True)
+
+            if not goals:
+                self.budget_alert_label.setVisible(False)
+                return
+
+            # カテゴリ別実績を取得
+            actuals = execute_query('''
+                SELECT category, SUM(amount) FROM expenses
+                WHERE strftime('%Y', date) = ? AND strftime('%m', date) = ?
+                GROUP BY category
+            ''', (str(self.current_year), f"{self.current_month:02d}"), fetch_all=True)
+
+            actual_dict = {row[0]: row[1] for row in actuals} if actuals else {}
+
+            alerts = []
+            for category, goal_amount in goals:
+                if goal_amount <= 0:
+                    continue
+                actual = actual_dict.get(category, 0)
+                ratio = actual / goal_amount * 100
+
+                if ratio >= 100:
+                    alerts.append(f'<span style="color:#D32F2F; font-weight:bold;">[超過] {category}: {actual:,.0f}円 / {goal_amount:,.0f}円 ({ratio:.0f}%)</span>')
+                elif ratio >= 80:
+                    alerts.append(f'<span style="color:#F57F17; font-weight:bold;">[注意] {category}: {actual:,.0f}円 / {goal_amount:,.0f}円 ({ratio:.0f}%)</span>')
+
+            if alerts:
+                self.budget_alert_label.setText('<br>'.join(alerts))
+                self.budget_alert_label.setVisible(True)
+            else:
+                self.budget_alert_label.setVisible(False)
+
+        except Exception as e:
+            print(f"予算アラート更新エラー: {e}")
 
     def get_expenses_as_dataframe(self):
         """支出データをDataFrameとして取得する"""
@@ -1203,15 +1275,15 @@ class IncomeExpenseWidget(BaseWidget):
 
     def update_expense_in_db(self, expense_id, date, category, amount, description):
         
-        execute_query.execute('''
-            UPDATE expenses 
+        execute_query('''
+            UPDATE expenses
             SET date = ?, category = ?, amount = ?, description = ?
             WHERE id = ?
         ''', (date, category, amount, description, expense_id))
 
     def delete_expense_from_db(self, expense_id):
         
-        execute_query.execute('DELETE FROM expenses WHERE id = ?', (expense_id,))
+        execute_query('DELETE FROM expenses WHERE id = ?', (expense_id,))
 
     def show_year_month_dialog(self):
         dialog = YearMonthDialog(self)
@@ -1479,69 +1551,16 @@ class IncomeExpenseWidget(BaseWidget):
         dialog = RecurringExpenseDialog(self)
         dialog.exec_()
         
-    def process_recurring_expenses(self):
-        """定期支払いの自動記録を処理"""
-        today = QDate.currentDate()
-
-        # 定期支払いテーブルが存在するか確認
-        table_exists = execute_query("SELECT name FROM sqlite_master WHERE type='table' AND name='recurring_expenses'", fetch_one=True)
-        if not table_exists:
-            print("定期支払いテーブルが存在しません")
-            return
-
-        # 有効な定期支払いを取得
-        recurring_expenses = execute_query('''
-            SELECT id, category, amount, description, payment_day 
-            FROM recurring_expenses 
-            WHERE is_active = 1
-        ''', fetch_all=True)
-
-        # 処理結果を表示
-        for expense in recurring_expenses:
-            expense_id, category, amount, description, payment_day = expense
-
-        processed = False  # 処理が行われたかフラグ
-
-        for expense in recurring_expenses:
-            expense_id, category, amount, description, payment_day = expense
-        
-            # 今日が支払日かチェック
-            if today.day() == payment_day:
-
-                # まだ記録されていないか確認
-                existing = execute_query('''
-                    SELECT id FROM expenses 
-                    WHERE date = ? AND category = ? AND amount = ? AND description LIKE ?
-                ''', (today.toString("yyyy-MM-dd"), category, amount, f"定期支払い: {description}%"), fetch_one=True)
-            
-                if not existing:
-                    # 支出を記録
-                    try:
-                        execute_query('''
-                            INSERT INTO expenses (date, category, amount, description)
-                            VALUES (?, ?, ?, ?)
-                        ''', (today.toString("yyyy-MM-dd"), category, amount, f"定期支払い: {description}"))
-                        processed = True
-                    except Exception as e:
-                        print(f"挿入エラー: {e}")
-              
-        # 何か処理が行われた場合はテーブルを更新
-        if processed:
-            try:
-                self.update_table()
-                self.update_monthly_expense()
-                QMessageBox.information(self, "定期支払い", "定期支払いを自動記録しました")
-            except Exception as e:
-                print(f"更新エラー: {e}")
-    
     def register_past_recurring_expenses(self):
         """過去の定期支払いを遡って登録する"""
         # 登録期間の設定ダイアログを表示
-        start_date = QDate()
-        start_date.setDate(self.current_year, self.current_month, 1)
-        start_date = start_date.addMonths(-6)  # デフォルトで半年前から
-            
-        end_date = QDate.currentDate()
+        # 開始月・終了月を先月全体（1日〜末日）に自動設定
+        today = QDate.currentDate()
+        first_of_this_month = QDate(today.year(), today.month(), 1)
+        last_month_end = first_of_this_month.addDays(-1)
+        start_date = QDate(last_month_end.year(), last_month_end.month(), 1)  # 先月1日
+
+        end_date = last_month_end  # 先月末日
         
         dialog = QDialog(self)
         dialog.setWindowTitle("過去の定期支払い登録")
@@ -1705,7 +1724,73 @@ class IncomeExpenseWidget(BaseWidget):
         dialog = CreditCardImportDialog(self)
         if dialog.exec_() == QDialog.Accepted:
             self.update_table()
-            self.update_monthly_expense()    
+            self.update_monthly_expense()
+
+    def show_rakuten_pay_import_dialog(self):
+        """楽天PAY明細取込ダイアログを表示（URL自動取得対応）"""
+        import json as _json
+
+        # 保存済みURLを読み込み
+        url = ''
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'rakuten_pay_config.json')
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = _json.load(f)
+                    url = config.get('sheet_url', '')
+            except Exception:
+                pass
+
+        # URLが未設定なら入力ダイアログ
+        if not url:
+            url, ok = QInputDialog.getText(
+                self, '楽天PAY設定',
+                'Google SheetsのCSV公開URLを入力してください:\n\n'
+                '（Google Sheetsで ファイル > 共有 > ウェブに公開 >\n'
+                '「楽天PAY明細」シート > CSV形式 > 公開 で取得できます）'
+            )
+            if not ok or not url:
+                return
+            # URLを保存
+            try:
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    _json.dump({'sheet_url': url}, f, ensure_ascii=False)
+            except Exception:
+                pass
+
+        # ダイアログ作成
+        dialog = CreditCardImportDialog(self)
+        dialog.format_combo.setCurrentText('楽天PAY')
+
+        # URLからCSVデータを取得してStep2から開始
+        try:
+            dialog.load_from_url(url)
+            dialog.proceed_to_step2_from_url()
+        except Exception as e:
+            QMessageBox.warning(
+                self, '取得失敗',
+                f'URLからのデータ取得に失敗しました:\n{str(e)}\n\nファイル選択に切り替えます。'
+            )
+
+        if dialog.exec_() == QDialog.Accepted:
+            self.update_table()
+            self.update_monthly_expense()
+
+    def show_paypay_import_dialog(self):
+        """PayPay明細取込ダイアログを表示（CSVファイル選択方式）"""
+        dialog = CreditCardImportDialog(self)
+        dialog.format_combo.setCurrentText('PayPay')
+
+        if dialog.exec_() == QDialog.Accepted:
+            self.update_table()
+            self.update_monthly_expense()
+
+    def show_pasmo_import_dialog(self):
+        """PASMO明細取込ダイアログを表示（PDF取込）"""
+        dialog = PasmoImportDialog(self)
+        if dialog.exec_() == QDialog.Accepted:
+            self.update_table()
+            self.update_monthly_expense()
 
     def load_categories_for_filter(self):
         """フィルター用のカテゴリを読み込む"""
@@ -1817,11 +1902,33 @@ class IncomeExpenseWidget(BaseWidget):
             # フィルタリング処理
             selected_category = self.filter_combo.currentText()
             print(f"選択されたカテゴリ: '{selected_category}'")
-            
+
             filtered_data = all_data
             if selected_category != '全てのカテゴリ':
-                filtered_data = [row for row in all_data if row[2] == selected_category]
+                filtered_data = [row for row in filtered_data if row[2] == selected_category]
                 print(f"カテゴリフィルタ後のデータ件数: {len(filtered_data)}")
+
+            # キーワード検索フィルター
+            search_text = self.search_input.text().strip().lower()
+            if search_text:
+                filtered_data = [row for row in filtered_data
+                                 if search_text in (row[2] or '').lower() or search_text in (row[4] or '').lower()]
+
+            # 金額範囲フィルター
+            amount_min_text = self.amount_min_input.text().replace(',', '').strip()
+            amount_max_text = self.amount_max_input.text().replace(',', '').strip()
+            if amount_min_text:
+                try:
+                    amount_min = float(amount_min_text)
+                    filtered_data = [row for row in filtered_data if row[3] >= amount_min]
+                except ValueError:
+                    pass
+            if amount_max_text:
+                try:
+                    amount_max = float(amount_max_text)
+                    filtered_data = [row for row in filtered_data if row[3] <= amount_max]
+                except ValueError:
+                    pass
             
             # 並び替えオプション
             sort_option = self.sort_combo.currentText()
@@ -1871,8 +1978,7 @@ class IncomeExpenseWidget(BaseWidget):
                     conn.close()
                 except Exception as e:
                     print(f"カテゴリ取得エラー: {e}")
-                    categories = ['食費', '交通費', '娯楽', 'その他', '住宅', 
-                                '水道光熱費', '美容', '通信費', '日用品', '健康', '教育']
+                    categories = get_categories()
                 
                 print("=== テーブルにデータを設定中 ===")
                 for row, row_data in enumerate(filtered_data):
@@ -1930,7 +2036,10 @@ class IncomeExpenseWidget(BaseWidget):
             else:
                 self.expense_table.setRowCount(0)
                 print("表示するデータがありません")
-            
+
+            # カテゴリ合計を更新
+            self.update_category_total_label(filtered_data, selected_category)
+
             self.is_updating = False
             print("=== update_expense_table_display 完了(安全版) ===")
             
@@ -1975,6 +2084,165 @@ class IncomeExpenseWidget(BaseWidget):
                 self.expense_table.setItem(current_row, 3, QTableWidgetItem(f"{amount:,.0f}円"))
                 self.expense_table.setItem(current_row, 4, QTableWidgetItem(description))
                 current_row += 1
+
+        # カテゴリ合計を更新（カテゴリ別表示の場合は全体の合計を表示）
+        selected_category = self.filter_combo.currentText()
+        self.update_category_total_label(data, selected_category)
+
+    def update_category_total_label(self, data, selected_category):
+        """カテゴリ別合計ラベルを更新"""
+        try:
+            if not data or selected_category == '全てのカテゴリ':
+                self.category_total_label.setText('')
+                return
+
+            total_amount = sum(row[3] for row in data if row[3])
+            item_count = len(data)
+
+            self.category_total_label.setText(
+                f'【{selected_category}】 合計: {total_amount:,.0f}円 ({item_count}件)'
+            )
+        except Exception as e:
+            print(f"カテゴリ合計表示エラー: {e}")
+            self.category_total_label.setText('')
+
+    def export_to_excel(self):
+        """現在の月のデータをCSVファイルにエクスポート"""
+        try:
+            # データベースから現在月のデータを取得
+            query = '''
+                SELECT date, category, amount, description
+                FROM expenses
+                WHERE strftime('%Y', date) = ? AND strftime('%m', date) = ?
+                ORDER BY date
+            '''
+            month_str = f'{self.current_month:02d}'
+            data = execute_query(query, (str(self.current_year), month_str), fetch_all=True)
+
+            if not data:
+                QMessageBox.information(self, 'エクスポート', 'エクスポートするデータがありません。')
+                return
+
+            # DataFrameに変換
+            df = pd.DataFrame(data, columns=['日付', 'カテゴリ', '金額', '説明'])
+
+            # 保存先を選択
+            default_filename = f'家計簿_{self.current_year}年{self.current_month}月.csv'
+            file_path, _ = QFileDialog.getSaveFileName(
+                self, 'CSVファイルを保存', default_filename, 'CSV Files (*.csv)'
+            )
+
+            if file_path:
+                # CSVファイルに保存（BOM付きUTF-8でExcelでも文字化けなし）
+                df.to_csv(file_path, index=False, encoding='utf-8-sig')
+                QMessageBox.information(self, 'エクスポート完了', f'データを保存しました:\n{file_path}')
+
+        except Exception as e:
+            QMessageBox.critical(self, 'エラー', f'エクスポート中にエラーが発生しました:\n{e}')
+
+    def export_all_to_pdf(self):
+        """全データをPDFファイルにエクスポート"""
+        try:
+            from reportlab.lib import colors
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib.units import mm
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+
+            # 日本語フォントを登録
+            font_path = None
+            font_paths = [
+                'C:/Windows/Fonts/msgothic.ttc',
+                'C:/Windows/Fonts/meiryo.ttc',
+                'C:/Windows/Fonts/YuGothM.ttc',
+            ]
+            for fp in font_paths:
+                if os.path.exists(fp):
+                    font_path = fp
+                    break
+
+            if font_path:
+                pdfmetrics.registerFont(TTFont('JapaneseFont', font_path))
+                font_name = 'JapaneseFont'
+            else:
+                font_name = 'Helvetica'
+
+            # 全データを取得
+            query = '''
+                SELECT date, category, amount, description
+                FROM expenses
+                ORDER BY date DESC
+            '''
+            data = execute_query(query, fetch_all=True)
+
+            if not data:
+                QMessageBox.information(self, 'エクスポート', 'エクスポートするデータがありません。')
+                return
+
+            # 保存先を選択
+            default_filename = f'家計簿_全データ_{datetime.now().strftime("%Y%m%d")}.pdf'
+            file_path, _ = QFileDialog.getSaveFileName(
+                self, 'PDFファイルを保存', default_filename, 'PDF Files (*.pdf)'
+            )
+
+            if not file_path:
+                return
+
+            # PDF作成
+            doc = SimpleDocTemplate(file_path, pagesize=A4,
+                                    leftMargin=15*mm, rightMargin=15*mm,
+                                    topMargin=15*mm, bottomMargin=15*mm)
+
+            elements = []
+
+            # タイトル
+            styles = getSampleStyleSheet()
+            title_style = ParagraphStyle('Title', fontName=font_name, fontSize=16, alignment=1)
+            elements.append(Paragraph('家計簿 全データ一覧', title_style))
+            elements.append(Spacer(1, 10*mm))
+
+            # テーブルデータ作成
+            table_data = [['日付', 'カテゴリ', '金額', '説明']]
+            total_amount = 0
+            for row in data:
+                date_str = str(row[0]) if row[0] else ''
+                category = str(row[1]) if row[1] else ''
+                amount = row[2] if row[2] else 0
+                description = str(row[3]) if row[3] else ''
+                total_amount += amount
+                table_data.append([date_str, category, f'{amount:,.0f}円', description])
+
+            # 合計行を追加
+            table_data.append(['', '合計', f'{total_amount:,.0f}円', f'({len(data)}件)'])
+
+            # テーブル作成
+            col_widths = [25*mm, 30*mm, 30*mm, 85*mm]
+            table = Table(table_data, colWidths=col_widths, repeatRows=1)
+
+            table_style = TableStyle([
+                ('FONTNAME', (0, 0), (-1, -1), font_name),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1565C0')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#E3F2FD')),
+                ('FONTNAME', (0, -1), (-1, -1), font_name),
+            ])
+            table.setStyle(table_style)
+
+            elements.append(table)
+
+            # PDF出力
+            doc.build(elements)
+            QMessageBox.information(self, 'エクスポート完了', f'PDFを保存しました:\n{file_path}')
+
+        except ImportError:
+            QMessageBox.critical(self, 'エラー', 'reportlabがインストールされていません。\npip install reportlab を実行してください。')
+        except Exception as e:
+            QMessageBox.critical(self, 'エラー', f'PDFエクスポート中にエラーが発生しました:\n{e}')
 
     def display_expenses_normal_table(self, data):
         """通常のテーブル表示（デバッグ強化版）"""
@@ -2405,10 +2673,7 @@ class MonthlyReportWidget(BaseWidget):
         # カテゴリ選択エリア
         category_select_layout = QHBoxLayout()
         self.category_combo = QComboBox()
-        self.category_combo.addItems([
-            '食費', '交通費', '娯楽', 'その他', '住宅', 
-            '水道光熱費', '美容', '通信費', '日用品', '健康', '教育'
-        ])
+        self.category_combo.addItems(get_categories())
         self.add_category_button = QPushButton('カテゴリグラフ追加')
         self.add_category_button.clicked.connect(self.add_category_graph)
         self.clear_category_button = QPushButton('カテゴリグラフクリア')
@@ -3017,11 +3282,8 @@ class GoalManagementWidget(BaseWidget):
         category_form_layout = QFormLayout()
         
         self.category_combo = QComboBox()
-        self.category_combo.addItems([
-            '食費', '交通費', '娯楽', 'その他', '住宅', 
-            '水道光熱費', '美容', '通信費', '日用品', '健康', '教育'
-        ])
-        
+        self.category_combo.addItems(get_categories())
+
         self.category_goal_input = QLineEdit()
         
         category_form_layout.addRow('カテゴリ:', self.category_combo)
@@ -4870,469 +5132,6 @@ class CategoryManagementDialog(QDialog):
         # 選択状態を移動先の行に移す
         self.category_table.selectRow(target_row)
 
-# 2. 貯金目標設定・管理用のクラスを作成
-
-class SavingsGoalDialog(QDialog):
-    def __init__(self, goal_id=None, parent=None):
-        super().__init__(parent)
-        self.parent = parent
-        self.goal_id = goal_id
-        self.setWindowTitle('貯金目標の設定')
-        self.setMinimumWidth(400)
-        self.initUI()
-        
-        if goal_id:
-            self.load_goal_data()
-    
-    def initUI(self):
-        layout = QVBoxLayout()
-        
-        # フォームレイアウト
-        form_layout = QFormLayout()
-        
-        # 目標名
-        self.name_input = QLineEdit()
-        form_layout.addRow('目標名:', self.name_input)
-        
-        # 目標金額
-        self.target_amount_input = QLineEdit()
-        self.target_amount_input.setPlaceholderText('例: 1000000')
-        form_layout.addRow('目標金額 (円):', self.target_amount_input)
-        
-        # 現在の貯金額
-        self.current_amount_input = QLineEdit()
-        self.current_amount_input.setPlaceholderText('例: 50000')
-        form_layout.addRow('現在の貯金額 (円):', self.current_amount_input)
-        
-        # 開始日
-        self.start_date_edit = QDateEdit()
-        self.start_date_edit.setCalendarPopup(True)
-        self.start_date_edit.setDate(QDate.currentDate())
-        form_layout.addRow('開始日:', self.start_date_edit)
-        
-        # 目標日
-        self.target_date_edit = QDateEdit()
-        self.target_date_edit.setCalendarPopup(True)
-        self.target_date_edit.setDate(QDate.currentDate().addMonths(12))  # デフォルトは1年後
-        self.target_date_checkbox = QCheckBox('期限を設定する')
-        self.target_date_checkbox.setChecked(True)
-        self.target_date_checkbox.stateChanged.connect(self.toggle_target_date)
-        
-        target_date_layout = QHBoxLayout()
-        target_date_layout.addWidget(self.target_date_checkbox)
-        target_date_layout.addWidget(self.target_date_edit)
-        form_layout.addRow('目標日:', target_date_layout)
-        
-        # 説明
-        self.description_input = QTextEdit()
-        self.description_input.setMaximumHeight(80)
-        form_layout.addRow('説明:', self.description_input)
-        
-        # 色選択
-        self.color_button = QPushButton()
-        self.color_button.setFixedSize(30, 30)
-        self.current_color = QColor('#4CAF50')  # デフォルト色
-        self.update_color_button()
-        self.color_button.clicked.connect(self.select_color)
-        form_layout.addRow('色:', self.color_button)
-        
-        layout.addLayout(form_layout)
-        
-        # ボタン
-        button_layout = QHBoxLayout()
-        save_button = QPushButton('保存')
-        save_button.clicked.connect(self.save_goal)
-        cancel_button = QPushButton('キャンセル')
-        cancel_button.clicked.connect(self.reject)
-        
-        button_layout.addWidget(cancel_button)
-        button_layout.addWidget(save_button)
-        layout.addLayout(button_layout)
-        
-        self.setLayout(layout)
-    
-    def toggle_target_date(self, state):
-        self.target_date_edit.setEnabled(state == Qt.Checked)
-    
-    def update_color_button(self):
-        style = f"background-color: {self.current_color.name()}; border: 1px solid #888;"
-        self.color_button.setStyleSheet(style)
-    
-    def select_color(self):
-        color = QColorDialog.getColor(self.current_color, self)
-        if color.isValid():
-            self.current_color = color
-            self.update_color_button()
-    
-    def load_goal_data(self):
-        conn = sqlite3.connect('budget.db')
-        c = conn.cursor()
-        c.execute('''
-            SELECT name, target_amount, current_amount, start_date, target_date, description, color
-            FROM savings_goals WHERE id = ?
-        ''', (self.goal_id,))
-        
-        goal = c.fetchone()
-        conn.close()
-        
-        if goal:
-            name, target_amount, current_amount, start_date, target_date, description, color = goal
-            
-            self.name_input.setText(name)
-            self.target_amount_input.setText(str(target_amount))
-            self.current_amount_input.setText(str(current_amount))
-            
-            # 開始日の設定
-            self.start_date_edit.setDate(QDate.fromString(start_date, 'yyyy-MM-dd'))
-            
-            # 目標日の設定
-            if target_date:
-                self.target_date_edit.setDate(QDate.fromString(target_date, 'yyyy-MM-dd'))
-                self.target_date_checkbox.setChecked(True)
-            else:
-                self.target_date_checkbox.setChecked(False)
-                self.target_date_edit.setEnabled(False)
-            
-            self.description_input.setPlainText(description or '')
-            
-            # 色の設定
-            if color:
-                self.current_color = QColor(color)
-                self.update_color_button()
-    
-    def save_goal(self):
-        # 入力値の検証
-        try:
-            name = self.name_input.text().strip()
-            if not name:
-                raise ValueError("目標名を入力してください")
-            
-            target_amount = float(self.target_amount_input.text().replace(',', ''))
-            if target_amount <= 0:
-                raise ValueError("目標金額は正の数を入力してください")
-            
-            current_amount_text = self.current_amount_input.text().strip()
-            current_amount = float(current_amount_text.replace(',', '')) if current_amount_text else 0
-            if current_amount < 0:
-                raise ValueError("現在の貯金額は0以上の数を入力してください")
-            
-            start_date = self.start_date_edit.date().toString('yyyy-MM-dd')
-            
-            if self.target_date_checkbox.isChecked():
-                target_date = self.target_date_edit.date().toString('yyyy-MM-dd')
-                if self.target_date_edit.date() < self.start_date_edit.date():
-                    raise ValueError("目標日は開始日より後の日付を設定してください")
-            else:
-                target_date = None
-            
-            description = self.description_input.toPlainText()
-            color = self.current_color.name()
-            
-            conn = sqlite3.connect('budget.db')
-            c = conn.cursor()
-            
-            if self.goal_id:  # 既存の目標を更新
-                c.execute('''
-                    UPDATE savings_goals 
-                    SET name = ?, target_amount = ?, current_amount = ?, start_date = ?, 
-                        target_date = ?, description = ?, color = ?
-                    WHERE id = ?
-                ''', (name, target_amount, current_amount, start_date, 
-                      target_date, description, color, self.goal_id))
-            else:  # 新しい目標を作成
-                c.execute('''
-                    INSERT INTO savings_goals 
-                    (name, target_amount, current_amount, start_date, target_date, description, color)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', (name, target_amount, current_amount, start_date, 
-                      target_date, description, color))
-            
-            conn.commit()
-            conn.close()
-            
-            self.accept()
-            
-        except ValueError as e:
-            QMessageBox.warning(self, '入力エラー', str(e))
-        except Exception as e:
-            QMessageBox.critical(self, 'エラー', f'保存中にエラーが発生しました: {str(e)}')
-
-
-class SavingsGoalWidget(BaseWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.parent = parent
-        self.initUI()
-        self.load_goals()
-    
-    def initUI(self):
-        layout = QVBoxLayout()
-        
-        layout.addLayout(self.button_layout)
-        
-        # 目標一覧エリア
-        self.goals_scroll_area = QScrollArea()
-        self.goals_scroll_area.setWidgetResizable(True)
-        self.goals_container = QWidget()
-        self.goals_layout = QVBoxLayout(self.goals_container)
-        self.goals_scroll_area.setWidget(self.goals_container)
-        layout.addWidget(self.goals_scroll_area)
-        
-        # 新規目標ボタン
-        self.add_goal_button = QPushButton('+ 新しい貯金目標を追加')
-        self.add_goal_button.clicked.connect(self.add_new_goal)
-        layout.addWidget(self.add_goal_button)
-        
-        self.setLayout(layout)
-    
-    def load_goals(self):
-        # 既存の目標表示をクリア
-        while self.goals_layout.count():
-            item = self.goals_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        
-        conn = sqlite3.connect('budget.db')
-        c = conn.cursor()
-        c.execute('''
-            SELECT id, name, target_amount, current_amount, start_date, target_date, description, color, is_completed
-            FROM savings_goals
-            ORDER BY is_completed, start_date DESC
-        ''')
-        
-        goals = c.fetchall()
-        conn.close()
-        
-        if not goals:
-            # 目標がない場合のメッセージ
-            no_goals_label = QLabel("貯金目標がまだ設定されていません。\n「+ 新しい貯金目標を追加」ボタンをクリックして最初の目標を設定しましょう。")
-            no_goals_label.setAlignment(Qt.AlignCenter)
-            no_goals_label.setStyleSheet("color: #666; margin: 50px;")
-            self.goals_layout.addWidget(no_goals_label)
-            return
-        
-        # 各目標のカードを作成
-        for goal in goals:
-            goal_id, name, target_amount, current_amount, start_date, target_date, description, color, is_completed = goal
-            self.add_goal_card(goal_id, name, target_amount, current_amount, start_date, target_date, description, color, is_completed)
-    
-    def add_goal_card(self, goal_id, name, target_amount, current_amount, start_date, target_date, description, color, is_completed):
-        # 目標カードのフレーム作成
-        card = QFrame()
-        card.setFrameShape(QFrame.StyledPanel)
-        card.setStyleSheet(f"QFrame {{ border: 1px solid #ddd; border-radius: 8px; margin: 5px; background-color: #fff; }}")
-        
-        card_layout = QVBoxLayout()
-        
-        # 目標名と編集/削除ボタン
-        header_layout = QHBoxLayout()
-        title_label = QLabel(f"<b>{name}</b>")
-        title_label.setStyleSheet(f"color: {color}; font-size: 16px;")
-        header_layout.addWidget(title_label)
-        
-        # 編集ボタン
-        edit_button = QPushButton("編集")
-        edit_button.setFixedSize(60, 25)
-        edit_button.clicked.connect(lambda: self.edit_goal(goal_id))
-        
-        # 削除ボタン
-        delete_button = QPushButton("削除")
-        delete_button.setFixedSize(60, 25)
-        delete_button.clicked.connect(lambda: self.delete_goal(goal_id, name))
-        
-        # 完了/未完了の切り替えボタン
-        complete_button = QPushButton("完了" if not is_completed else "未完了")
-        complete_button.setFixedSize(60, 25)
-        complete_button.clicked.connect(lambda: self.toggle_goal_completion(goal_id, is_completed))
-        
-        header_layout.addStretch()
-        header_layout.addWidget(edit_button)
-        header_layout.addWidget(delete_button)
-        header_layout.addWidget(complete_button)
-        
-        card_layout.addLayout(header_layout)
-        
-        # 進捗バー
-        progress_bar = QProgressBar()
-        progress_value = min(100, int((current_amount / target_amount) * 100)) if target_amount > 0 else 0
-        progress_bar.setValue(progress_value)
-        progress_bar.setTextVisible(True)
-        progress_bar.setFormat(f"{progress_value}% ({current_amount:,.0f}円 / {target_amount:,.0f}円)")
-        
-        # 進捗バーの色を設定
-        progress_bar.setStyleSheet(f"""
-            QProgressBar {{
-                border: 1px solid #ddd;
-                border-radius: 5px;
-                text-align: center;
-                height: 20px;
-            }}
-            QProgressBar::chunk {{
-                background-color: {color};
-                width: 10px;
-            }}
-        """)
-        
-        card_layout.addWidget(progress_bar)
-        
-        # 詳細情報
-        details_layout = QFormLayout()
-        
-        # 開始日
-        start_date_label = QLabel(start_date)
-        details_layout.addRow("開始日:", start_date_label)
-        
-        # 目標日（設定されている場合）
-        if target_date:
-            # 残り日数の計算
-            target_qdate = QDate.fromString(target_date, "yyyy-MM-dd")
-            current_qdate = QDate.currentDate()
-            days_left = current_qdate.daysTo(target_qdate)
-            
-            target_date_info = f"{target_date} (あと{days_left}日)" if days_left > 0 else f"{target_date} (期限超過)"
-            target_date_label = QLabel(target_date_info)
-            details_layout.addRow("目標日:", target_date_label)
-        
-        # 説明（あれば表示）
-        if description:
-            description_label = QLabel(description)
-            description_label.setWordWrap(True)
-            details_layout.addRow("説明:", description_label)
-        
-        # 平均必要貯金額
-        if target_date and not is_completed:
-            target_qdate = QDate.fromString(target_date, "yyyy-MM-dd")
-            current_qdate = QDate.currentDate()
-            days_left = current_qdate.daysTo(target_qdate)
-            
-            if days_left > 0:
-                amount_left = target_amount - current_amount
-                daily_saving = amount_left / days_left
-                monthly_saving = daily_saving * 30
-                
-                savings_pace_label = QLabel(f"1日: {daily_saving:,.0f}円 / 月: {monthly_saving:,.0f}円")
-                details_layout.addRow("目標達成に必要な貯金ペース:", savings_pace_label)
-        
-        card_layout.addLayout(details_layout)
-        
-        # 入金ボタン
-        if not is_completed:
-            deposit_button = QPushButton("入金を記録")
-            deposit_button.clicked.connect(lambda: self.record_deposit(goal_id, name, target_amount, current_amount))
-            card_layout.addWidget(deposit_button)
-        
-        card.setLayout(card_layout)
-        self.goals_layout.addWidget(card)
-    
-    def add_new_goal(self):
-        dialog = SavingsGoalDialog(parent=self)
-        if dialog.exec_() == QDialog.Accepted:
-            self.load_goals()
-    
-    def edit_goal(self, goal_id):
-        dialog = SavingsGoalDialog(goal_id, parent=self)
-        if dialog.exec_() == QDialog.Accepted:
-            self.load_goals()
-    
-    def delete_goal(self, goal_id, name):
-        reply = QMessageBox.question(
-            self, '確認', 
-            f'貯金目標「{name}」を削除してもよろしいですか？\n関連する全ての入金記録も削除されます。',
-            QMessageBox.Yes | QMessageBox.No, 
-            QMessageBox.No
-        )
-        
-        if reply != QMessageBox.Yes:
-            return
-        
-        try:
-            conn = sqlite3.connect('budget.db')
-            c = conn.cursor()
-            
-            # 関連する入金記録を削除
-            c.execute('DELETE FROM savings_transactions WHERE goal_id = ?', (goal_id,))
-            
-            # 目標を削除
-            c.execute('DELETE FROM savings_goals WHERE id = ?', (goal_id,))
-            
-            conn.commit()
-            conn.close()
-            
-            self.load_goals()
-            
-        except Exception as e:
-            QMessageBox.critical(self, 'エラー', f'削除中にエラーが発生しました: {str(e)}')
-    
-    def toggle_goal_completion(self, goal_id, current_state):
-        new_state = not current_state
-        status_text = "完了" if new_state else "未完了"
-        
-        try:
-            conn = sqlite3.connect('budget.db')
-            c = conn.cursor()
-            c.execute('UPDATE savings_goals SET is_completed = ? WHERE id = ?', (int(new_state), goal_id))
-            conn.commit()
-            conn.close()
-            
-            QMessageBox.information(self, '状態変更', f'目標を{status_text}状態に変更しました。')
-            self.load_goals()
-            
-        except Exception as e:
-            QMessageBox.critical(self, 'エラー', f'状態変更中にエラーが発生しました: {str(e)}')
-    
-    def record_deposit(self, goal_id, goal_name, target_amount, current_amount):
-        """目標への入金を記録"""
-        # 入金ダイアログ
-        amount, ok = QInputDialog.getDouble(
-            self, '入金記録', 
-            f'目標「{goal_name}」への入金額を入力してください:',
-            0, 0, 1000000000, 0
-        )
-        
-        if not ok or amount <= 0:
-            return
-        
-        # 説明の入力
-        description, ok = QInputDialog.getText(
-            self, '入金記録', 
-            '説明（任意）:',
-            QLineEdit.Normal, ''
-        )
-        
-        if not ok:
-            return
-        
-        try:
-            # 入金記録を追加
-            today = QDate.currentDate().toString('yyyy-MM-dd')
-            execute_query('''
-                INSERT INTO savings_transactions (goal_id, amount, date, description)
-                VALUES (?, ?, ?, ?)
-            ''', (goal_id, amount, today, description))
-            
-            # 目標の現在金額を更新
-            new_amount = current_amount + amount
-            execute_query('UPDATE savings_goals SET current_amount = ? WHERE id = ?', (new_amount, goal_id))
-            
-            # 目標達成したか確認
-            if new_amount >= target_amount:
-                reply = QMessageBox.question(
-                    self, 'おめでとうございます！', 
-                    f'目標「{goal_name}」を達成しました！\n目標を完了状態に変更しますか？',
-                    QMessageBox.Yes | QMessageBox.No, 
-                    QMessageBox.Yes
-                )
-                
-                if reply == QMessageBox.Yes:
-                    execute_query('UPDATE savings_goals SET is_completed = 1 WHERE id = ?', (goal_id,))
-            
-            QMessageBox.information(self, '入金完了', f'{amount:,.0f}円の入金を記録しました。')
-            self.load_goals()
-            
-        except Exception as e:
-            QMessageBox.critical(self, 'エラー', f'入金記録中にエラーが発生しました: {str(e)}')
-
-
 class ExpenseAnalyzer:
     """支出データの分析とアドバイス生成を担当するクラス"""
     
@@ -5941,677 +5740,6 @@ class ExpenseAnalyzer:
             'category_averages': category_averages,
             'future_predictions': future_predictions
         }
-
-class AIExpenseAdvisorWidget(BaseWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.parent = parent
-        # ExpenseAnalyzerをインポート
-        self.analyzer = ExpenseAnalyzer()
-        
-        # UIの初期化
-        self.initUI()
-        
-        # データの分析と表示
-        self.load_analysis()
-    
-    def initUI(self):
-        layout = QVBoxLayout()
-        
-        layout.addLayout(self.button_layout)
-
-        # ヘッダー
-        header_layout = QHBoxLayout()
-        title_label = QLabel("AI支出分析アドバイザー")
-        title_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #333;")
-        refresh_button = QPushButton("分析更新")
-        refresh_button.clicked.connect(self.load_analysis)
-        
-        header_layout.addWidget(title_label)
-        header_layout.addStretch()
-        header_layout.addWidget(refresh_button)
-        
-        layout.addLayout(header_layout)
-        
-        # タブウィジェット
-        self.tab_widget = QTabWidget()
-        
-        # タブ1: アドバイス
-        self.advice_tab = QWidget()
-        self.setup_advice_tab()
-        self.tab_widget.addTab(self.advice_tab, "パーソナルアドバイス")
-        
-        # タブ2: 支出パターン
-        self.pattern_tab = QWidget()
-        self.setup_pattern_tab()
-        self.tab_widget.addTab(self.pattern_tab, "支出パターン分析")
-        
-        # タブ3: 傾向分析
-        self.trend_tab = QWidget()
-        self.setup_trend_tab()
-        self.tab_widget.addTab(self.trend_tab, "支出傾向分析")
-        
-        # タブ4: 将来予測
-        self.forecast_tab = QWidget()
-        self.setup_forecast_tab()
-        self.tab_widget.addTab(self.forecast_tab, "将来支出予測")
-        
-        layout.addWidget(self.tab_widget)
-        
-        self.setLayout(layout)
-
-    def setup_advice_tab(self):
-        """アドバイスタブのUI設定"""
-        layout = QVBoxLayout()
-        
-        # アドバイスリスト表示領域
-        self.recommendations_layout = QVBoxLayout()
-        
-        # スクロールエリア
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_container = QWidget()
-        scroll_container.setLayout(self.recommendations_layout)
-        scroll_area.setWidget(scroll_container)
-        
-        layout.addWidget(scroll_area)
-        
-        self.advice_tab.setLayout(layout)
-    
-    def setup_pattern_tab(self):
-        """支出パターンタブのUI設定"""
-        layout = QVBoxLayout()
-        
-        # 支出パターンの概要セクション
-        pattern_summary_group = QGroupBox("支出パターン概要")
-        pattern_summary_layout = QVBoxLayout()
-        self.pattern_summary_label = QLabel("データを分析中...")
-        self.pattern_summary_label.setWordWrap(True)
-        pattern_summary_layout.addWidget(self.pattern_summary_label)
-        pattern_summary_group.setLayout(pattern_summary_layout)
-        layout.addWidget(pattern_summary_group)
-        
-        # カテゴリ別の支出割合チャート
-        category_chart_group = QGroupBox("カテゴリ別支出割合")
-        category_chart_layout = QVBoxLayout()
-        self.category_chart_view = QChartView()
-        self.category_chart_view.setMinimumHeight(300)
-        category_chart_layout.addWidget(self.category_chart_view)
-        category_chart_group.setLayout(category_chart_layout)
-        layout.addWidget(category_chart_group)
-        
-        # 頻繁な支出リスト
-        recurring_group = QGroupBox("頻繁な支出")
-        recurring_layout = QVBoxLayout()
-        self.recurring_expenses_list = QListWidget()
-        recurring_layout.addWidget(self.recurring_expenses_list)
-        recurring_group.setLayout(recurring_layout)
-        layout.addWidget(recurring_group)
-        
-        # 平日vs週末の支出パターン
-        weekday_group = QGroupBox("平日/週末の支出パターン")
-        weekday_layout = QFormLayout()
-        self.weekday_avg_label = QLabel("0円")
-        self.weekend_avg_label = QLabel("0円")
-        weekday_layout.addRow("平日の平均支出:", self.weekday_avg_label)
-        weekday_layout.addRow("週末の平均支出:", self.weekend_avg_label)
-        weekday_group.setLayout(weekday_layout)
-        layout.addWidget(weekday_group)
-        
-        self.pattern_tab.setLayout(layout)
-    
-    def setup_advice_tab(self):
-        """アドバイスタブのUI設定"""
-        layout = QVBoxLayout()
-        
-        # アドバイスリスト表示領域
-        self.recommendations_layout = QVBoxLayout()
-        
-        # スクロールエリア
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_container = QWidget()
-        scroll_container.setLayout(self.recommendations_layout)
-        scroll_area.setWidget(scroll_container)
-        
-        layout.addWidget(scroll_area)
-        
-        self.advice_tab.setLayout(layout)
-    
-    def setup_pattern_tab(self):
-        """支出パターンタブのUI設定"""
-        layout = QVBoxLayout()
-        
-        # 支出パターンの概要セクション
-        pattern_summary_group = QGroupBox("支出パターン概要")
-        pattern_summary_layout = QVBoxLayout()
-        self.pattern_summary_label = QLabel("データを分析中...")
-        self.pattern_summary_label.setWordWrap(True)
-        pattern_summary_layout.addWidget(self.pattern_summary_label)
-        pattern_summary_group.setLayout(pattern_summary_layout)
-        layout.addWidget(pattern_summary_group)
-        
-        # カテゴリ別の支出割合チャート
-        category_chart_group = QGroupBox("カテゴリ別支出割合")
-        category_chart_layout = QVBoxLayout()
-        self.category_chart_view = QChartView()
-        self.category_chart_view.setMinimumHeight(300)
-        category_chart_layout.addWidget(self.category_chart_view)
-        category_chart_group.setLayout(category_chart_layout)
-        layout.addWidget(category_chart_group)
-        
-        # 頻繁な支出リスト
-        recurring_group = QGroupBox("頻繁な支出")
-        recurring_layout = QVBoxLayout()
-        self.recurring_expenses_list = QListWidget()
-        recurring_layout.addWidget(self.recurring_expenses_list)
-        recurring_group.setLayout(recurring_layout)
-        layout.addWidget(recurring_group)
-        
-        # 平日vs週末の支出パターン
-        weekday_group = QGroupBox("平日/週末の支出パターン")
-        weekday_layout = QFormLayout()
-        self.weekday_avg_label = QLabel("0円")
-        self.weekend_avg_label = QLabel("0円")
-        weekday_layout.addRow("平日の平均支出:", self.weekday_avg_label)
-        weekday_layout.addRow("週末の平均支出:", self.weekend_avg_label)
-        weekday_group.setLayout(weekday_layout)
-        layout.addWidget(weekday_group)
-        
-        self.pattern_tab.setLayout(layout)
-    
-    def setup_trend_tab(self):
-        """支出傾向分析タブのUI設定"""
-        layout = QVBoxLayout()
-        
-        # 月次推移チャート
-        trend_chart_group = QGroupBox("月次支出推移")
-        trend_chart_layout = QVBoxLayout()
-        self.trend_chart_view = QChartView()
-        self.trend_chart_view.setMinimumHeight(250)
-        trend_chart_layout.addWidget(self.trend_chart_view)
-        trend_chart_group.setLayout(trend_chart_layout)
-        layout.addWidget(trend_chart_group)
-        
-        # 前月比較
-        comparison_group = QGroupBox("前月比較")
-        comparison_layout = QFormLayout()
-        
-        self.prev_month_label = QLabel("前月:")
-        self.current_month_label = QLabel("当月:")
-        self.change_pct_label = QLabel("0%")
-        
-        self.prev_expense_label = QLabel("0円")
-        self.current_expense_label = QLabel("0円")
-        
-        self.prev_income_label = QLabel("0円")
-        self.current_income_label = QLabel("0円")
-        
-        self.prev_balance_label = QLabel("0円")
-        self.current_balance_label = QLabel("0円")
-        
-        comparison_layout.addRow("期間:", self.prev_month_label)
-        comparison_layout.addRow("支出:", self.prev_expense_label)
-        comparison_layout.addRow("収入:", self.prev_income_label)
-        comparison_layout.addRow("収支:", self.prev_balance_label)
-        
-        comparison_layout.addItem(QSpacerItem(20, 20, QSizePolicy.Minimum, QSizePolicy.Fixed))
-        
-        comparison_layout.addRow("期間:", self.current_month_label)
-        comparison_layout.addRow("支出:", self.current_expense_label)
-        comparison_layout.addRow("収入:", self.current_income_label)
-        comparison_layout.addRow("収支:", self.current_balance_label)
-        
-        comparison_layout.addItem(QSpacerItem(20, 20, QSizePolicy.Minimum, QSizePolicy.Fixed))
-        
-        comparison_layout.addRow("支出変化率:", self.change_pct_label)
-        
-        comparison_group.setLayout(comparison_layout)
-        layout.addWidget(comparison_group)
-        
-        # カテゴリ別変化
-        category_change_group = QGroupBox("カテゴリ別変化")
-        category_change_layout = QVBoxLayout()
-        self.category_change_list = QListWidget()
-        category_change_layout.addWidget(self.category_change_list)
-        category_change_group.setLayout(category_change_layout)
-        layout.addWidget(category_change_group)
-        
-        self.trend_tab.setLayout(layout)
-    
-    def setup_forecast_tab(self):
-        """将来予測タブのUI設定"""
-        layout = QVBoxLayout()
-        
-        # 予測概要
-        forecast_intro_label = QLabel("直近のデータに基づいた将来3ヶ月分の支出予測です。季節的な傾向なども考慮しています。")
-        forecast_intro_label.setWordWrap(True)
-        layout.addWidget(forecast_intro_label)
-        
-        # 予測チャート
-        forecast_chart_group = QGroupBox("支出予測チャート")
-        forecast_chart_layout = QVBoxLayout()
-        self.forecast_chart_view = QChartView()
-        self.forecast_chart_view.setMinimumHeight(250)
-        forecast_chart_layout.addWidget(self.forecast_chart_view)
-        forecast_chart_group.setLayout(forecast_chart_layout)
-        layout.addWidget(forecast_chart_group)
-        
-        # 予測詳細
-        forecast_details_group = QGroupBox("予測詳細")
-        forecast_details_layout = QVBoxLayout()
-        self.forecast_details_list = QListWidget()
-        forecast_details_layout.addWidget(self.forecast_details_list)
-        forecast_details_group.setLayout(forecast_details_layout)
-        layout.addWidget(forecast_details_group)
-        
-        self.forecast_tab.setLayout(layout) 
-
-    def load_analysis(self):
-        """データの分析と表示の更新"""
-        try:
-            # 各種分析を実行
-            self.savings_recommendations = self.analyzer.generate_savings_recommendations()
-            self.spending_patterns = self.analyzer.analyze_spending_patterns()
-            self.monthly_trends = self.analyzer.analyze_monthly_trends()
-            self.future_forecast = self.analyzer.forecast_future_expenses()
-            
-            # 各タブのデータ表示を更新
-            self.update_advice_tab()
-            self.update_pattern_tab()
-            self.update_trend_tab()
-            self.update_forecast_tab()
-            
-        except Exception as e:
-            QMessageBox.warning(self, "分析エラー", f"データの分析中にエラーが発生しました: {str(e)}")
-    
-    def update_advice_tab(self):
-        """アドバイスタブのデータ表示を更新"""
-        # 既存のアドバイスをクリア
-        while self.recommendations_layout.count():
-            item = self.recommendations_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        
-        if self.savings_recommendations['status'] == 'error':
-            error_label = QLabel(self.savings_recommendations['message'])
-            error_label.setStyleSheet("color: red;")
-            self.recommendations_layout.addWidget(error_label)
-            return
-        
-        # アドバイスの種類に応じた色設定
-        type_colors = {
-            'critical': "#FFEBEE",  # 赤系の薄い色（緊急）
-            'warning': "#FFF8E1",   # 黄色系の薄い色（警告）
-            'alert': "#FFF3E0",     # オレンジ系の薄い色（注意）
-            'notice': "#E8F5E9",    # 緑系の薄い色（通知）
-            'tip': "#E3F2FD",       # 青系の薄い色（ヒント）
-            'insight': "#F3E5F5",   # 紫系の薄い色（洞察）
-            'suggestion': "#E0F7FA" # 水色系の薄い色（提案）
-        }
-        
-        # 各アドバイスをカードとして表示
-        for recommendation in self.savings_recommendations['recommendations']:
-            card = QFrame()
-            card.setFrameShape(QFrame.StyledPanel)
-            
-            # アドバイスの種類に応じた背景色
-            bg_color = type_colors.get(recommendation['type'], "#FFFFFF")
-            card.setStyleSheet(f"QFrame {{ background-color: {bg_color}; border-radius: 8px; margin: 5px; padding: 10px; }}")
-            
-            card_layout = QVBoxLayout()
-            
-            # タイトル
-            title_label = QLabel(f"<b>{recommendation['title']}</b>")
-            title_label.setStyleSheet("font-size: 14px;")
-            card_layout.addWidget(title_label)
-            
-            # 説明
-            desc_label = QLabel(recommendation['description'])
-            desc_label.setWordWrap(True)
-            card_layout.addWidget(desc_label)
-            
-            card.setLayout(card_layout)
-            self.recommendations_layout.addWidget(card)
-        
-        # 空のウィジェットを追加（スクロール用の余白）
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.recommendations_layout.addWidget(spacer)
-
-    def update_pattern_tab(self):
-        """支出パターンタブのデータ表示を更新"""
-        if self.spending_patterns['status'] == 'error':
-            self.pattern_summary_label.setText(self.spending_patterns['message'])
-            return
-        
-        # パターン概要テキスト
-        pattern_points = self.spending_patterns['pattern_points']
-        summary_text = "<ul>"
-        for point in pattern_points:
-            summary_text += f"<li>{point}</li>"
-        summary_text += "</ul>"
-        self.pattern_summary_label.setText(summary_text)
-        
-        # カテゴリ別支出割合のパイチャート
-        self.update_category_pie_chart()
-        
-        # 頻繁な支出リスト
-        self.recurring_expenses_list.clear()
-        for item in self.spending_patterns['recurring_expenses'][:10]:  # 上位10件のみ
-            list_item = QListWidgetItem(
-                f"{item['description']} ({item['category']}): {item['count']}回, 平均{item['avg_amount']:,.0f}円"
-            )
-            self.recurring_expenses_list.addItem(list_item)
-        
-        # 平日/週末の支出パターン
-        weekday_data = self.spending_patterns['weekday_vs_weekend']
-        self.weekday_avg_label.setText(f"{weekday_data['avg_weekday']:,.0f}円")
-        self.weekend_avg_label.setText(f"{weekday_data['avg_weekend']:,.0f}円")
-    
-    def update_category_pie_chart(self):
-        """カテゴリ別支出割合のパイチャートを更新"""
-        chart = QChart()
-        chart.setAnimationOptions(QChart.SeriesAnimations)
-        
-        # パイチャートのデータ作成
-        series = QPieSeries()
-        
-        # カラーリスト（異なる色を用意）
-        colors = [
-            '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEEAD',
-            '#FFD93D', '#6C5B7B', '#F7A072', '#C06C84', '#95A5A6'
-        ]
-        
-        # カテゴリ別割合データ
-        category_percentages = self.spending_patterns['category_percentages']
-        
-        # 合計が少なすぎるカテゴリをまとめる（5%未満）
-        other_total = 0
-        for category, percentage in sorted(category_percentages.items(), key=lambda x: x[1], reverse=True):
-            if percentage >= 3:  # 3%以上のカテゴリは個別に表示
-                slice = series.append(f"{category} ({percentage:.1f}%)", percentage)
-            else:
-                other_total += percentage
-        
-        # その他カテゴリがあれば追加
-        if other_total > 0:
-            series.append(f"その他 ({other_total:.1f}%)", other_total)
-        
-        # 各スライスの色を設定
-        for i, slice in enumerate(series.slices()):
-            color_idx = i % len(colors)
-            slice.setBrush(QColor(colors[color_idx]))
-            slice.setLabelVisible(True)
-        
-        chart.addSeries(series)
-        chart.setTitle("カテゴリ別支出割合")
-        chart.legend().setVisible(True)
-        chart.legend().setAlignment(Qt.AlignBottom)
-        
-        self.category_chart_view.setChart(chart)    
-
-    def update_trend_tab(self):
-        """支出傾向分析タブのデータ表示を更新"""
-        if self.monthly_trends['status'] == 'error':
-            # エラーメッセージ表示
-            return
-        
-        # 月次推移チャートの更新
-        self.update_trend_chart()
-        
-        # 前月/当月の比較データ表示
-        current_month = self.monthly_trends['current_month']
-        prev_month = self.monthly_trends['prev_month']
-        
-        self.current_month_label.setText(current_month['name'])
-        self.current_expense_label.setText(f"{current_month['data']['expense']:,.0f}円")
-        self.current_income_label.setText(f"{current_month['data']['income']:,.0f}円")
-        self.current_balance_label.setText(f"{current_month['data']['balance']:,.0f}円")
-        
-        self.prev_month_label.setText(prev_month['name'])
-        self.prev_expense_label.setText(f"{prev_month['data']['expense']:,.0f}円")
-        self.prev_income_label.setText(f"{prev_month['data']['income']:,.0f}円")
-        self.prev_balance_label.setText(f"{prev_month['data']['balance']:,.0f}円")
-        
-        change_pct = self.monthly_trends['change_pct']
-        self.change_pct_label.setText(f"{change_pct:.1f}%")
-        
-        # カテゴリ別変化リスト
-        self.category_change_list.clear()
-        
-        # 増加カテゴリ
-        for category, data in self.monthly_trends.get('increased_categories', {}).items():
-            item = QListWidgetItem(f"↗️ {category}: +{data['change_pct']:.1f}% ({data['prev']:,.0f}円→{data['current']:,.0f}円)")
-            item.setForeground(QColor("#F44336"))  # 赤色で表示
-            self.category_change_list.addItem(item)
-        
-        # 減少カテゴリ
-        for category, data in self.monthly_trends.get('decreased_categories', {}).items():
-            item = QListWidgetItem(f"↘️ {category}: {data['change_pct']:.1f}% ({data['prev']:,.0f}円→{data['current']:,.0f}円)")
-            item.setForeground(QColor("#4CAF50"))  # 緑色で表示
-            self.category_change_list.addItem(item)
-    
-    def update_trend_chart(self):
-        """月次推移チャートを更新"""
-        chart = QChart()
-        chart.setAnimationOptions(QChart.SeriesAnimations)
-        
-        # 月次データ
-        monthly_total = self.monthly_trends['monthly_total']
-        monthly_income = self.monthly_trends['monthly_income']
-        monthly_balance = self.monthly_trends['monthly_balance']
-        
-        months = sorted(monthly_total.keys())
-        
-        # 支出ライン
-        expense_series = QLineSeries()
-        expense_series.setName("支出")
-        
-        # 収入ライン
-        income_series = QLineSeries()
-        income_series.setName("収入")
-        
-        # 収支ライン
-        balance_series = QLineSeries()
-        balance_series.setName("収支")
-        
-        for i, month in enumerate(months):
-            expense_series.append(i, monthly_total[month])
-            income_series.append(i, monthly_income.get(month, 0))
-            balance_series.append(i, monthly_balance.get(month, 0))
-        
-        # シリーズの色設定
-        expense_series.setColor(QColor("#F44336"))  # 赤色
-        income_series.setColor(QColor("#4CAF50"))  # 緑色
-        balance_series.setColor(QColor("#2196F3"))  # 青色
-        
-        # シリーズの線幅設定
-        pen = QPen()
-        pen.setWidth(3)
-        
-        expense_series.setPen(pen)
-        income_series.setPen(pen)
-        balance_series.setPen(pen)
-        
-        # チャートに追加
-        chart.addSeries(expense_series)
-        chart.addSeries(income_series)
-        chart.addSeries(balance_series)
-        
-        # X軸設定
-        axis_x = QValueAxis()
-        axis_x.setRange(0, len(months) - 1)
-        axis_x.setTickCount(len(months))
-        axis_x.setLabelFormat("%d")
-        
-        # X軸のラベルをカスタマイズ
-        for i, month in enumerate(months):
-            axis_x.setLabelFormat("") # ラベルを消去
-        
-        chart.addAxis(axis_x, Qt.AlignBottom)
-        expense_series.attachAxis(axis_x)
-        income_series.attachAxis(axis_x)
-        balance_series.attachAxis(axis_x)
-        
-        # Y軸設定
-        axis_y = QValueAxis()
-        all_values = []
-        for month in months:
-            all_values.append(monthly_total[month])
-            all_values.append(monthly_income.get(month, 0))
-            all_values.append(monthly_balance.get(month, 0))
-        
-        max_value = max(all_values) if all_values else 100000
-        min_value = min(all_values) if all_values else 0
-        
-        axis_y.setRange(min(0, min_value * 1.1), max_value * 1.1)
-        axis_y.setLabelFormat("%,.0f")
-        
-        chart.addAxis(axis_y, Qt.AlignLeft)
-        expense_series.attachAxis(axis_y)
-        income_series.attachAxis(axis_y)
-        balance_series.attachAxis(axis_y)
-        
-        # チャートタイトル
-        chart.setTitle("月次収支推移")
-        chart.legend().setVisible(True)
-        chart.legend().setAlignment(Qt.AlignBottom)
-        
-        self.trend_chart_view.setChart(chart)
-    
-    def update_forecast_tab(self):
-        """将来予測タブのデータ表示を更新"""
-        if self.future_forecast['status'] == 'error':
-            error_label = QLabel(self.future_forecast['message'])
-            error_label.setStyleSheet("color: red;")
-            return
-        
-        # 予測チャートの更新
-        self.update_forecast_chart()
-        
-        # 予測詳細リスト
-        self.forecast_details_list.clear()
-        
-        for prediction in self.future_forecast['future_predictions']:
-            month_name = prediction['month_name']
-            total_expense = prediction['total_predicted']
-            income = prediction['predicted_income']
-            balance = prediction['predicted_balance']
-            
-            # 月ごとのサマリーアイテム
-            summary_item = QListWidgetItem(f"■ {month_name}の予測")
-            summary_item.setFont(QFont("", weight=QFont.Bold))
-            self.forecast_details_list.addItem(summary_item)
-            
-            # 支出合計
-            self.forecast_details_list.addItem(QListWidgetItem(f"予測支出: {total_expense:,.0f}円"))
-            
-            # 収入
-            self.forecast_details_list.addItem(QListWidgetItem(f"予測収入: {income:,.0f}円"))
-            
-            # 収支
-            balance_text = f"予測収支: {balance:,.0f}円"
-            balance_item = QListWidgetItem(balance_text)
-            
-            if balance < 0:
-                balance_item.setForeground(QColor("#F44336"))  # 赤色（赤字）
-            else:
-                balance_item.setForeground(QColor("#4CAF50"))  # 緑色（黒字）
-            
-            self.forecast_details_list.addItem(balance_item)
-            
-            # 主要カテゴリの予測
-            top_categories = sorted(
-                prediction['predicted_expenses'].items(),
-                key=lambda x: x[1],
-                reverse=True
-            )[:5]  # 上位5カテゴリ
-            
-            category_item = QListWidgetItem("主要カテゴリ予測:")
-            category_item.setFont(QFont("", italic=True))
-            self.forecast_details_list.addItem(category_item)
-            
-            for category, amount in top_categories:
-                if amount > 0:
-                    self.forecast_details_list.addItem(
-                        QListWidgetItem(f"- {category}: {amount:,.0f}円")
-                    )
-            
-            # 区切り
-            self.forecast_details_list.addItem(QListWidgetItem(""))
-    
-    def update_forecast_chart(self):
-        """予測チャートを更新"""
-        chart = QChart()
-        chart.setAnimationOptions(QChart.SeriesAnimations)
-        
-        # 履歴データ
-        monthly_total = self.monthly_trends['monthly_total']
-        months = sorted(monthly_total.keys())
-        
-        # 予測データ
-        future_predictions = self.future_forecast['future_predictions']
-        
-        # バーセット（履歴）
-        history_set = QBarSet("実績")
-        history_set.setColor(QColor("#4CAF50"))  # 緑色
-        
-        # バーセット（予測）
-        forecast_set = QBarSet("予測")
-        forecast_set.setColor(QColor("#2196F3"))  # 青色
-        
-        # X軸ラベル
-        x_labels = []
-        
-        # 履歴データを追加
-        for month in months:
-            history_set.append(monthly_total[month])
-            x_labels.append(month)  # 'YYYY-MM'形式
-        
-        # 予測データを追加
-        for prediction in future_predictions:
-            forecast_set.append(prediction['total_predicted'])
-            x_labels.append(prediction['month_key'])
-        
-        # バーシリーズ
-        series = QBarSeries()
-        series.append(history_set)
-        series.append(forecast_set)
-        
-        # チャートに追加
-        chart.addSeries(series)
-        
-        # X軸設定
-        axis_x = QBarCategoryAxis()
-        # 日本語表示のため、'YYYY-MM'形式を'YYYY年MM月'形式に変換
-        axis_x.append([f"{x.split('-')[0]}年{x.split('-')[1]}月" for x in x_labels])
-        chart.addAxis(axis_x, Qt.AlignBottom)
-        series.attachAxis(axis_x)
-        
-        # Y軸設定
-        axis_y = QValueAxis()
-        all_values = []
-        for month in months:
-            all_values.append(monthly_total[month])
-        for prediction in future_predictions:
-            all_values.append(prediction['total_predicted'])
-        
-        max_value = max(all_values) if all_values else 100000
-        
-        axis_y.setRange(0, max_value * 1.1)
-        axis_y.setLabelFormat("%,.0f")
-        
-        chart.addAxis(axis_y, Qt.AlignLeft)
-        series.attachAxis(axis_y)
-        
-        # チャートタイトル
-        chart.setTitle("支出実績と予測")
-        chart.legend().setVisible(True)
-        chart.legend().setAlignment(Qt.AlignBottom)
-        
-        self.forecast_chart_view.setChart(chart)  
-
 import json
 import csv         
 
@@ -6622,19 +5750,62 @@ class CreditCardImportDialog(QDialog):
         self.setMinimumWidth(600)
         self.setMinimumHeight(500)
         
-        # 現在のフォーマット設定（デフォルト値）
-        self.current_format = {
-            'encoding': 'utf-8',
-            'date_format': '%Y/%m/%d',
-            'skip_rows': 0,
-            'negation_needed': True,
-            'date_column': '利用日',
-            'amount_column': '利用金額',
-            'description_column': '利用店名・商品名',
-            'category_mapping': {
-                'vs カ)マルエツ': '食費'
+        # フォーマットプリセット
+        self.format_presets = {
+            '一般的なクレジットカード': {
+                'encoding': 'utf-8',
+                'date_format': '%Y/%m/%d',
+                'skip_rows': 0,
+                'negation_needed': True,
+                'date_column': '利用日',
+                'amount_column': '利用金額',
+                'description_column': '利用店名・商品名',
+                'description_prefix': 'クレジットカード: ',
+                'category_mapping': {
+                    'ﾏﾙｴﾂ': '食費',
+                    'ﾄｳｷﾖｳﾃﾞﾝﾘﾖｸ': '水道光熱費',
+                    'CLAUDE.AI SUBSCRIPTI': '娯楽',
+                    'ｽｲﾄﾞｳﾘ': '水道光熱費'
+                },
+                'exclude_keywords': [
+                    'ﾓﾊﾞｲﾙﾊﾟｽﾓ',
+                    '楽天証券投信積立０．５％～',
+                    '楽天キャッシュ　チャージ',
+                    'APPLE COM BILL',
+                    'ﾄｳｴﾝﾃｲ',
+                    'ｸﾗｽ',
+                    'ソフトバンク（Ｂ）',
+                    'ｾｲﾌﾞﾃﾂﾄﾞｳ'
+                ]
+            },
+            '楽天PAY': {
+                'encoding': 'utf-8',
+                'date_format': '%Y/%m/%d',
+                'skip_rows': 0,
+                'negation_needed': False,
+                'date_column': '日付',
+                'amount_column': '金額',
+                'description_column': '店舗名',
+                'description_prefix': '楽天PAY: ',
+                'category_mapping': {},
+                'exclude_keywords': []
+            },
+            'PayPay': {
+                'encoding': 'utf-8-sig',
+                'date_format': '%Y/%m/%d %H:%M:%S',
+                'skip_rows': 0,
+                'negation_needed': False,
+                'date_column': '取引日',
+                'amount_column': '出金金額（円）',
+                'description_column': '取引先',
+                'description_prefix': 'PayPay: ',
+                'category_mapping': {},
+                'exclude_keywords': []
             }
         }
+
+        # 現在のフォーマット設定（デフォルト値）
+        self.current_format = dict(self.format_presets['一般的なクレジットカード'])
         
         self.initUI()
         
@@ -6674,7 +5845,7 @@ class CreditCardImportDialog(QDialog):
         format_layout = QVBoxLayout()
         
         self.format_combo = QComboBox()
-        self.format_combo.addItems(['一般的なクレジットカード', 'その他'])
+        self.format_combo.addItems(['一般的なクレジットカード', '楽天PAY', 'PayPay', 'その他'])
         self.format_combo.currentIndexChanged.connect(self.toggle_custom_settings)
         format_layout.addWidget(self.format_combo)
         
@@ -6791,7 +5962,32 @@ class CreditCardImportDialog(QDialog):
 
         self.category_group.setLayout(category_layout)
         step2_layout.addWidget(self.category_group)
-        
+
+        # 除外キーワードグループボックス
+        self.exclude_group = QGroupBox('除外キーワード')
+        exclude_layout = QVBoxLayout()
+
+        exclude_label = QLabel('以下のキーワードを含む明細は取り込みから除外されます:')
+        exclude_layout.addWidget(exclude_label)
+
+        self.exclude_keywords_list = QListWidget()
+        exclude_layout.addWidget(self.exclude_keywords_list)
+
+        exclude_button_layout = QHBoxLayout()
+
+        add_exclude_button = QPushButton('追加')
+        add_exclude_button.clicked.connect(self.add_exclude_keyword)
+        exclude_button_layout.addWidget(add_exclude_button)
+
+        delete_exclude_button = QPushButton('選択したキーワードを削除')
+        delete_exclude_button.clicked.connect(self.delete_exclude_keyword)
+        exclude_button_layout.addWidget(delete_exclude_button)
+
+        exclude_layout.addLayout(exclude_button_layout)
+
+        self.exclude_group.setLayout(exclude_layout)
+        step2_layout.addWidget(self.exclude_group)
+
         # 戻る・次へボタン
         button_layout2 = QHBoxLayout()
         back_button2 = QPushButton('戻る')
@@ -6873,12 +6069,69 @@ class CreditCardImportDialog(QDialog):
         self.setLayout(layout)
 
     def toggle_custom_settings(self, index):
-        """フォーマット選択に応じてカスタム設定の表示/非表示を切り替え"""
-        if index == 1:  # 「その他」が選択された場合
+        """フォーマット選択に応じてカスタム設定の表示/非表示とプリセット切替え"""
+        import copy
+        format_name = self.format_combo.currentText()
+
+        if format_name == 'その他':
             self.custom_settings_widget.show()
         else:
             self.custom_settings_widget.hide()
-    
+
+        # プリセットが存在する場合、current_formatを切替え
+        if format_name in self.format_presets:
+            self.current_format = copy.deepcopy(self.format_presets[format_name])
+
+        # ウィンドウタイトルを更新
+        if format_name == '楽天PAY':
+            self.setWindowTitle('楽天PAY明細取込')
+        elif format_name == 'PayPay':
+            self.setWindowTitle('PayPay明細取込')
+        else:
+            self.setWindowTitle('クレジットカード明細取込')
+
+    def _get_format_label(self):
+        """現在のフォーマットに応じた明細ラベルを返す"""
+        format_name = self.format_combo.currentText()
+        if format_name == '楽天PAY':
+            return '楽天PAY明細'
+        if format_name == 'PayPay':
+            return 'PayPay明細'
+        return 'クレジットカード明細'
+
+    def load_from_url(self, url):
+        """Google Sheets公開URLからCSVデータを取得"""
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+        response.encoding = 'utf-8'
+        self.csv_data = pd.read_csv(io.StringIO(response.text))
+        self.file_path_input.setText('Google Sheets URL')
+
+    def proceed_to_step2_from_url(self):
+        """URL経由でCSVデータ読込済みの状態からStep2に進む"""
+        column_names = self.csv_data.columns.tolist()
+
+        self.date_column_combo.clear()
+        self.date_column_combo.addItems(column_names)
+        if self.current_format['date_column'] in column_names:
+            self.date_column_combo.setCurrentText(self.current_format['date_column'])
+
+        self.amount_column_combo.clear()
+        self.amount_column_combo.addItems(column_names)
+        if self.current_format['amount_column'] in column_names:
+            self.amount_column_combo.setCurrentText(self.current_format['amount_column'])
+
+        self.description_column_combo.clear()
+        self.description_column_combo.addItems(column_names)
+        if self.current_format['description_column'] in column_names:
+            self.description_column_combo.setCurrentText(self.current_format['description_column'])
+
+        self.update_category_mapping_table()
+        self.update_exclude_keywords_list()
+
+        self.step_label.setText('ステップ 2/3: 列マッピングとカテゴリ設定')
+        self.stack.setCurrentIndex(1)
+
     def browse_file(self):
         """CSVファイルを選択するダイアログを表示"""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -6922,11 +6175,8 @@ class CreditCardImportDialog(QDialog):
             # キーワードを正規化（全角→半角、大文字→小文字）
             normalized_keyword = self.normalize_text(keyword)
             
-            category_list = [
-                '食費', '交通費', '娯楽', 'その他', '住宅', 
-                '水道光熱費', '美容', '通信費', '日用品', '健康', '教育'
-            ]
-            
+            category_list = get_categories()
+
             category, ok = QInputDialog.getItem(
                 self, 'カテゴリ選択', 'カテゴリ:', category_list, 0, False
             )
@@ -6945,7 +6195,43 @@ class CreditCardImportDialog(QDialog):
             
             self.category_mapping_table.setItem(row, 0, QTableWidgetItem(keyword))
             self.category_mapping_table.setItem(row, 1, QTableWidgetItem(category))
-    
+
+    def update_exclude_keywords_list(self):
+        """除外キーワードリストを更新"""
+        self.exclude_keywords_list.clear()
+        for keyword in self.current_format['exclude_keywords']:
+            self.exclude_keywords_list.addItem(QListWidgetItem(keyword))
+
+    def add_exclude_keyword(self):
+        """除外キーワードを追加"""
+        keyword, ok = QInputDialog.getText(self, '除外キーワード追加', 'キーワード:')
+        if ok and keyword:
+            keyword = keyword.strip()
+            if keyword and keyword not in self.current_format['exclude_keywords']:
+                self.current_format['exclude_keywords'].append(keyword)
+                self.update_exclude_keywords_list()
+
+    def delete_exclude_keyword(self):
+        """選択された除外キーワードを削除"""
+        selected_items = self.exclude_keywords_list.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, '警告', '削除するキーワードを選択してください')
+            return
+
+        keyword = selected_items[0].text()
+
+        reply = QMessageBox.question(
+            self, '確認',
+            f'除外キーワード "{keyword}" を削除してもよろしいですか？',
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            if keyword in self.current_format['exclude_keywords']:
+                self.current_format['exclude_keywords'].remove(keyword)
+                self.update_exclude_keywords_list()
+
     def proceed_to_step2(self):
         """ステップ2に進む前の処理"""
         # ファイルが選択されているか確認
@@ -6989,7 +6275,10 @@ class CreditCardImportDialog(QDialog):
             
             # カテゴリマッピングテーブルの更新
             self.update_category_mapping_table()
-            
+
+            # 除外キーワードリストの更新
+            self.update_exclude_keywords_list()
+
             # ステップ2に進む
             self.step_label.setText('ステップ 2/3: 列マッピングとカテゴリ設定')
             self.stack.setCurrentIndex(1)
@@ -7022,6 +6311,14 @@ class CreditCardImportDialog(QDialog):
                 self.preview_table.setItem(row_idx, 2, QTableWidgetItem(row_data['description']))
                 self.preview_table.setItem(row_idx, 3, QTableWidgetItem(row_data['category']))
             
+            # 期間指定を先月全体（1日〜末日）に自動設定
+            today = QDate.currentDate()
+            first_of_this_month = QDate(today.year(), today.month(), 1)
+            last_month_end = first_of_this_month.addDays(-1)
+            last_month_start = QDate(last_month_end.year(), last_month_end.month(), 1)
+            self.start_date_edit.setDate(last_month_start)
+            self.end_date_edit.setDate(last_month_end)
+
             # ステップ3に進む
             self.step_label.setText('ステップ 3/3: プレビューと取り込み実行')
             self.stack.setCurrentIndex(2)
@@ -7045,19 +6342,37 @@ class CreditCardImportDialog(QDialog):
                 formatted_date = date_obj.strftime('%Y-%m-%d')
                 
                 # 金額処理
-                amount = float(str(row[amount_col]).replace(',', '').replace('円', '').strip())
+                amount_str = str(row[amount_col]).replace(',', '').replace('円', '').strip()
+                if amount_str == '' or amount_str == 'nan' or amount_str == '-':
+                    continue
+                amount = float(amount_str)
                 if self.current_format['negation_needed']:
                     amount = -amount
-                
+
                 # 金額の絶対値を使用（支出として記録するため）
                 amount = abs(amount)
+                if amount == 0:
+                    continue
                 
                 # 説明処理
                 description = str(row[description_col])
                 
                 # 説明文を正規化して比較用に準備
                 normalized_description = self.normalize_text(description)
-                
+
+                # 除外キーワードチェック
+                excluded = False
+                credit_prefix = self.normalize_text(self.current_format.get('description_prefix', 'クレジットカード: '))
+                for exclude_keyword in self.current_format['exclude_keywords']:
+                    normalized_exclude = self.normalize_text(exclude_keyword)
+                    if normalized_exclude.startswith(credit_prefix):
+                        normalized_exclude = normalized_exclude[len(credit_prefix):]
+                    if normalized_exclude and normalized_exclude in normalized_description:
+                        excluded = True
+                        break
+                if excluded:
+                    continue
+
                 # カテゴリ推定
                 category = 'その他'  # デフォルト
                 for keyword, mapped_category in self.current_format['category_mapping'].items():
@@ -7098,7 +6413,7 @@ class CreditCardImportDialog(QDialog):
         # 取り込みの確認
         reply = QMessageBox.question(
             self, '確認',
-            f'{total_records}件のクレジットカード明細を取り込みます。よろしいですか？',
+            f'{total_records}件の{self._get_format_label()}を取り込みます。よろしいですか？',
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
         
@@ -7111,7 +6426,7 @@ class CreditCardImportDialog(QDialog):
             
             QMessageBox.information(
                 self, '取り込み完了',
-                f'{imported_count}件のクレジットカード明細を取り込みました。'
+                f'{imported_count}件の{self._get_format_label()}を取り込みました。'
             )
             
             # ダイアログを閉じる
@@ -7132,7 +6447,8 @@ class CreditCardImportDialog(QDialog):
             date = item['date']
             category = item['category']
             amount = abs(item['amount'])  # 支出なので絶対値を使用
-            description = f"クレジットカード: {item['description']}"
+            prefix = self.current_format.get('description_prefix', 'クレジットカード: ')
+            description = f"{prefix}{item['description']}"
             
             # 重複チェック
             if self.duplicate_check.isChecked():
@@ -7215,7 +6531,8 @@ class CreditCardImportDialog(QDialog):
             # マッピングデータをJSONに変換
             mapping_data = {
                 'name': mapping_name,
-                'category_mapping': self.current_format['category_mapping']
+                'category_mapping': self.current_format['category_mapping'],
+                'exclude_keywords': self.current_format['exclude_keywords']
             }
             mapping_json = json.dumps(mapping_data, ensure_ascii=False, indent=2)
             
@@ -7269,7 +6586,10 @@ class CreditCardImportDialog(QDialog):
             if reply == QMessageBox.Yes:
                 self.current_format['category_mapping'] = mapping_data['category_mapping']
                 self.update_category_mapping_table()
-                
+                if 'exclude_keywords' in mapping_data:
+                    self.current_format['exclude_keywords'] = mapping_data['exclude_keywords']
+                    self.update_exclude_keywords_list()
+
                 mapping_name = mapping_data.get('name', 'カスタムマッピング')
                 QMessageBox.information(self, '読み込み完了', f'カテゴリマッピング"{mapping_name}"を読み込みました。')
                 
@@ -7295,11 +6615,8 @@ class CreditCardImportDialog(QDialog):
         layout.addWidget(text_edit)
         
         # カテゴリリスト
-        category_list = [
-            '食費', '交通費', '娯楽', 'その他', '住宅', 
-            '水道光熱費', '美容', '通信費', '日用品', '健康', '教育'
-        ]
-        
+        category_list = get_categories()
+
         # カテゴリ一覧表示
         category_label = QLabel('利用可能なカテゴリ: ' + ', '.join(category_list))
         category_label.setWordWrap(True)
@@ -7431,7 +6748,475 @@ class CreditCardImportDialog(QDialog):
             QMessageBox.information(self, 'インポート完了', f'{added_count}件のマッピングを{("インポート" if replace_existing else "追加")}しました。')
             
         except Exception as e:
-            QMessageBox.critical(self, 'エラー', f'インポート中にエラーが発生しました: {str(e)}')  
+            QMessageBox.critical(self, 'エラー', f'インポート中にエラーが発生しました: {str(e)}')
+
+
+class PasmoImportDialog(QDialog):
+    """モバイルPASMO残額ご利用明細PDF取込ダイアログ"""
+
+    # 除外する種別
+    EXCLUDE_TYPES = ['繰', 'ｶｰﾄﾞ']
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('PASMO明細取込')
+        self.setMinimumWidth(700)
+        self.setMinimumHeight(500)
+        self.preview_data = []
+        self.initUI()
+
+    def initUI(self):
+        layout = QVBoxLayout()
+
+        # ステップ表示
+        self.step_label = QLabel('ステップ 1/2: PDFファイルの選択')
+        self.step_label.setStyleSheet('font-weight: bold; font-size: 14px;')
+        layout.addWidget(self.step_label)
+
+        self.stack = QStackedWidget()
+
+        # ---- ステップ1: ファイル選択 ----
+        step1_widget = QWidget()
+        step1_layout = QVBoxLayout()
+
+        info_label = QLabel(
+            'モバイルPASMO会員メニューサイト (mobile.pasmo.jp) から\n'
+            'ダウンロードした「残額ご利用明細」PDFを選択してください。'
+        )
+        step1_layout.addWidget(info_label)
+
+        file_group = QGroupBox('PDFファイル選択')
+        file_layout = QHBoxLayout()
+        self.file_path_input = QLineEdit()
+        self.file_path_input.setReadOnly(True)
+        self.file_path_input.setPlaceholderText('PDFファイルを選択してください')
+        browse_button = QPushButton('参照...')
+        browse_button.clicked.connect(self.browse_file)
+        file_layout.addWidget(self.file_path_input)
+        file_layout.addWidget(browse_button)
+        file_group.setLayout(file_layout)
+        step1_layout.addWidget(file_group)
+
+        next_button1 = QPushButton('解析して次へ')
+        next_button1.clicked.connect(self.parse_and_proceed)
+        step1_layout.addWidget(next_button1, alignment=Qt.AlignRight)
+
+        step1_widget.setLayout(step1_layout)
+
+        # ---- ステップ2: プレビューと取込 ----
+        step2_widget = QWidget()
+        step2_layout = QVBoxLayout()
+
+        self.summary_label = QLabel('')
+        step2_layout.addWidget(self.summary_label)
+
+        self.preview_table = QTableWidget(0, 4)
+        self.preview_table.setHorizontalHeaderLabels(['日付', '区間', '金額', 'カテゴリ'])
+        self.preview_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        step2_layout.addWidget(self.preview_table)
+
+        # === 取り込みモード選択 ===
+        mode_group = QGroupBox('取り込みモード')
+        mode_layout = QVBoxLayout()
+
+        # 一括取り込み（デフォルト）
+        self.bulk_mode_radio = QCheckBox('一括取り込み（合計金額を1件の交通費として登録）')
+        self.bulk_mode_radio.setChecked(True)
+        self.bulk_mode_radio.setStyleSheet('font-weight: bold;')
+        mode_layout.addWidget(self.bulk_mode_radio)
+
+        # 一括取り込み用の日付選択
+        self.bulk_date_layout = QHBoxLayout()
+        self.bulk_date_layout.addWidget(QLabel('  取り込み日付:'))
+        self.bulk_date_edit = QDateEdit()
+        self.bulk_date_edit.setCalendarPopup(True)
+        self.bulk_date_edit.setDate(QDate.currentDate())
+        self.bulk_date_layout.addWidget(self.bulk_date_edit)
+        self.bulk_total_label = QLabel('')
+        self.bulk_total_label.setStyleSheet('font-weight: bold; color: #1565C0; margin-left: 10px;')
+        self.bulk_date_layout.addWidget(self.bulk_total_label)
+        self.bulk_date_layout.addStretch()
+        mode_layout.addLayout(self.bulk_date_layout)
+
+        # チェックのON/OFFで個別取り込み設定の表示切替
+        self.bulk_mode_radio.toggled.connect(self._toggle_import_mode)
+
+        mode_group.setLayout(mode_layout)
+        mode_group.hide()  # 一括モードUIを非表示
+        step2_layout.addWidget(mode_group)
+
+        # === 個別取り込み設定（一括モードOFF時に表示） ===
+        self.individual_group = QGroupBox('個別取り込み設定')
+        individual_layout = QVBoxLayout()
+
+        # 重複チェック
+        self.duplicate_check = QCheckBox('取り込み時に重複をチェックする')
+        self.duplicate_check.setChecked(True)
+        individual_layout.addWidget(self.duplicate_check)
+
+        # 取り込み期間指定
+        date_range_layout = QHBoxLayout()
+        self.date_range_check = QCheckBox()
+        self.date_range_check.setChecked(True)
+        date_range_layout.addWidget(self.date_range_check)
+        self.start_date_edit = QDateEdit()
+        self.start_date_edit.setCalendarPopup(True)
+        self.start_date_edit.setDate(QDate.currentDate().addMonths(-6))
+        date_range_layout.addWidget(QLabel('開始日:'))
+        date_range_layout.addWidget(self.start_date_edit)
+        self.end_date_edit = QDateEdit()
+        self.end_date_edit.setCalendarPopup(True)
+        self.end_date_edit.setDate(QDate.currentDate())
+        date_range_layout.addWidget(QLabel('終了日:'))
+        date_range_layout.addWidget(self.end_date_edit)
+        individual_layout.addLayout(date_range_layout)
+
+        self.individual_group.setLayout(individual_layout)
+        self.individual_group.setVisible(True)   # 常時表示
+        step2_layout.addWidget(self.individual_group)
+
+        # 戻る・取り込みボタン
+        button_layout = QHBoxLayout()
+        back_button = QPushButton('戻る')
+        back_button.clicked.connect(lambda: (
+            self.step_label.setText('ステップ 1/2: PDFファイルの選択'),
+            self.stack.setCurrentIndex(0)
+        ))
+        self.import_button = QPushButton('取り込み実行')
+        self.import_button.clicked.connect(self.execute_import)
+        self.import_button.setStyleSheet('background-color: #4CAF50; color: white; font-weight: bold;')
+        button_layout.addWidget(back_button)
+        button_layout.addStretch()
+        button_layout.addWidget(self.import_button)
+        step2_layout.addLayout(button_layout)
+
+        step2_widget.setLayout(step2_layout)
+
+        self.stack.addWidget(step1_widget)
+        self.stack.addWidget(step2_widget)
+        layout.addWidget(self.stack)
+        self.setLayout(layout)
+
+    def browse_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, 'PASMO PDFファイルを選択', '',
+            'PDFファイル (*.pdf);;すべてのファイル (*.*)'
+        )
+        if file_path:
+            self.file_path_input.setText(file_path)
+
+    def _infer_start_year(self, file_path):
+        """ファイル名から開始年を推定する"""
+        import re
+        basename = os.path.basename(file_path)
+        # PB80F224032817377_20250104_20260211120230.pdf のようなパターン
+        m = re.search(r'_(\d{4})\d{4}_', basename)
+        if m:
+            return int(m.group(1))
+        return QDate.currentDate().year()
+
+    def parse_and_proceed(self):
+        """PDFを解析してステップ2に進む"""
+        if not self.file_path_input.text():
+            QMessageBox.warning(self, '警告', 'PDFファイルを選択してください')
+            return
+
+        try:
+            import pdfplumber
+        except ImportError:
+            QMessageBox.critical(
+                self, 'エラー',
+                'pdfplumber がインストールされていません。\n\n'
+                'コマンドプロンプトで以下を実行してください:\n'
+                'pip install pdfplumber'
+            )
+            return
+
+        try:
+            self.preview_data = self.parse_pasmo_pdf(self.file_path_input.text())
+
+            if not self.preview_data:
+                QMessageBox.warning(self, '警告', '取り込み可能なデータが見つかりませんでした。')
+                return
+
+            # プレビューテーブル更新
+            self.preview_table.setRowCount(0)
+            for row_idx, row_data in enumerate(self.preview_data):
+                self.preview_table.insertRow(row_idx)
+                self.preview_table.setItem(row_idx, 0, QTableWidgetItem(row_data['date']))
+                self.preview_table.setItem(row_idx, 1, QTableWidgetItem(row_data['description'].replace('PASMO: ', '')))
+                self.preview_table.setItem(row_idx, 2, QTableWidgetItem(f"¥{row_data['amount']:,.0f}"))
+
+                # カテゴリはComboBoxで編集可能に
+                category_combo = QComboBox()
+                categories = ['交通費', '食費', '娯楽', 'その他', '住宅',
+                              '水道光熱費', '美容', '通信費', '日用品', '健康', '教育']
+                category_combo.addItems(categories)
+                category_combo.setCurrentText(row_data['category'])
+                category_combo.currentTextChanged.connect(
+                    lambda text, idx=row_idx: self._update_category(idx, text)
+                )
+                self.preview_table.setCellWidget(row_idx, 3, category_combo)
+
+            # 期間を先月全体（1日〜末日）に自動設定
+            today = QDate.currentDate()
+            first_of_this_month = QDate(today.year(), today.month(), 1)
+            last_month_end = first_of_this_month.addDays(-1)
+            last_month_start = QDate(last_month_end.year(), last_month_end.month(), 1)
+            self.start_date_edit.setDate(last_month_start)
+            self.end_date_edit.setDate(last_month_end)
+
+            total = len(self.preview_data)
+            total_amount = sum(d['amount'] for d in self.preview_data)
+            self.summary_label.setText(
+                f'解析結果: {total}件の交通利用 (合計 ¥{total_amount:,.0f})'
+            )
+            self.bulk_total_label.setText(f'合計: ¥{total_amount:,.0f}（{total}件分）')
+
+            self.step_label.setText('ステップ 2/2: プレビューと取り込み実行')
+            self.stack.setCurrentIndex(1)
+
+        except Exception as e:
+            QMessageBox.critical(self, 'エラー', f'PDF解析に失敗しました:\n{str(e)}')
+
+    def _toggle_import_mode(self, bulk_checked):
+        """一括/個別モードの切り替え"""
+        self.individual_group.setVisible(not bulk_checked)
+
+    def _update_category(self, row_idx, text):
+        """プレビューデータのカテゴリを更新"""
+        if row_idx < len(self.preview_data):
+            self.preview_data[row_idx]['category'] = text
+
+    def parse_pasmo_pdf(self, file_path):
+        """PASMO PDFを解析してデータリストを返す"""
+        import pdfplumber
+        import re
+
+        start_year = self._infer_start_year(file_path)
+        results = []
+
+        with pdfplumber.open(file_path) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text()
+                if not text:
+                    continue
+
+                lines = text.split('\n')
+                prev_month = None
+
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    # データ行: "MM DD 種別 ..." のパターン
+                    m = re.match(r'^(\d{2})\s+(\d{2})\s+(.+)$', line)
+                    if not m:
+                        continue
+
+                    month = int(m.group(1))
+                    day = int(m.group(2))
+                    rest = m.group(3)
+
+                    # 年の推定: 月が前の行より小さくなったら年を+1
+                    if prev_month is not None and month < prev_month:
+                        start_year += 1
+                    prev_month = month
+
+                    # 種別を判定
+                    # 繰越行: "繰 ..."
+                    if rest.startswith('繰'):
+                        continue
+
+                    # チャージ行: "ｶｰﾄﾞ ..." (差額が正)
+                    if rest.startswith('ｶｰﾄﾞ'):
+                        continue
+
+                    # 鉄道利用行: "入 {駅名} 出 {駅名} \金額 差額"
+                    # または: "定 {駅名} 出 {駅名} \金額 差額"
+                    ride_match = re.match(
+                        r'^(入|定)\s+(.+?)\s+出\s+(.+?)\s+\\[\\\d,.]+\s+([+-][\d,]+)$',
+                        rest
+                    )
+                    if ride_match:
+                        ride_type = ride_match.group(1)
+                        station_from = ride_match.group(2).strip()
+                        station_to = ride_match.group(3).strip()
+                        diff_str = ride_match.group(4).replace(',', '')
+                        diff = int(diff_str)
+
+                        if diff >= 0:
+                            continue  # 正の差額はチャージ等なのでスキップ
+
+                        amount = abs(diff)
+                        date_str = f'{start_year}-{month:02d}-{day:02d}'
+
+                        # 「地　渋谷」→「渋谷(地下鉄)」のように整形
+                        station_from = self._clean_station_name(station_from)
+                        station_to = self._clean_station_name(station_to)
+
+                        description = f'PASMO: {station_from} → {station_to}'
+                        category = '交通費'
+
+                        results.append({
+                            'date': date_str,
+                            'amount': amount,
+                            'description': description,
+                            'category': category
+                        })
+
+        return results
+
+    def _clean_station_name(self, name):
+        """駅名を整形する（地　渋谷 → 渋谷 など）"""
+        import re
+        # 「地　渋谷」「地 渋谷」→「渋谷」（地下鉄プレフィックス除去）
+        m = re.match(r'^地[\s　]+(.+)$', name)
+        if m:
+            return m.group(1)
+        # 「東武　柏」→「東武 柏」（全角スペースをスペースに）
+        name = name.replace('\u3000', ' ')
+        return name
+
+    def execute_import(self):
+        """取り込みを実行"""
+        self._execute_individual_import()
+
+    def _execute_bulk_import(self):
+        """一括取り込み: 合計金額を1件の交通費として登録"""
+        total_amount = sum(d['amount'] for d in self.preview_data)
+        chosen_date = self.bulk_date_edit.date().toString('yyyy-MM-dd')
+        record_count = len(self.preview_data)
+
+        # 期間を説明に含める
+        dates = sorted([d['date'] for d in self.preview_data])
+        period = f'{dates[0]} ~ {dates[-1]}' if dates else ''
+        description = f'PASMO交通費({period}、{record_count}件)'
+
+        reply = QMessageBox.question(
+            self, '確認',
+            f'以下の内容で取り込みます:\n\n'
+            f'  日付: {chosen_date}\n'
+            f'  カテゴリ: 交通費\n'
+            f'  金額: ¥{total_amount:,.0f}\n'
+            f'  説明: {description}\n\n'
+            f'よろしいですか？',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            conn = sqlite3.connect('budget.db')
+            c = conn.cursor()
+
+            c.execute('''
+                INSERT INTO expenses (date, category, amount, description)
+                VALUES (?, ?, ?, ?)
+            ''', (chosen_date, '交通費', total_amount, description))
+
+            # インポート履歴を記録
+            import_date = QDate.currentDate().toString('yyyy-MM-dd')
+            file_name = os.path.basename(self.file_path_input.text())
+            c.execute('''
+                INSERT INTO credit_card_imports
+                (import_date, file_name, format_name, record_count)
+                VALUES (?, ?, ?, ?)
+            ''', (import_date, file_name, 'モバイルPASMO(一括)', 1))
+
+            conn.commit()
+            conn.close()
+
+            QMessageBox.information(
+                self, '取り込み完了',
+                f'PASMO交通費 ¥{total_amount:,.0f} を {chosen_date} として取り込みました。'
+            )
+            self.accept()
+
+        except Exception as e:
+            QMessageBox.critical(self, 'エラー', f'取り込み処理に失敗しました:\n{str(e)}')
+
+    def _execute_individual_import(self):
+        """個別取り込み: 各明細を個別に登録"""
+        filtered_data = self.preview_data
+        if self.date_range_check.isChecked():
+            start_date = self.start_date_edit.date().toString('yyyy-MM-dd')
+            end_date = self.end_date_edit.date().toString('yyyy-MM-dd')
+            filtered_data = [
+                d for d in self.preview_data
+                if start_date <= d['date'] <= end_date
+            ]
+
+        total_records = len(filtered_data)
+        if total_records == 0:
+            QMessageBox.warning(self, '警告', '取り込むデータがありません')
+            return
+
+        reply = QMessageBox.question(
+            self, '確認',
+            f'{total_records}件のPASMO明細を取り込みます。よろしいですか？',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            conn = sqlite3.connect('budget.db')
+            c = conn.cursor()
+            imported_count = 0
+            duplicate_count = 0
+
+            for item in filtered_data:
+                date = item['date']
+                category = item['category']
+                amount = item['amount']
+                description = item['description']
+
+                # 重複チェック
+                if self.duplicate_check.isChecked():
+                    c.execute('''
+                        SELECT id FROM expenses
+                        WHERE date = ? AND category = ? AND amount = ? AND description = ?
+                    ''', (date, category, amount, description))
+                    if c.fetchone():
+                        duplicate_count += 1
+                        continue
+
+                c.execute('''
+                    INSERT INTO expenses (date, category, amount, description)
+                    VALUES (?, ?, ?, ?)
+                ''', (date, category, amount, description))
+                imported_count += 1
+
+            conn.commit()
+
+            # インポート履歴を記録
+            import_date = QDate.currentDate().toString('yyyy-MM-dd')
+            file_name = os.path.basename(self.file_path_input.text())
+            c.execute('''
+                INSERT INTO credit_card_imports
+                (import_date, file_name, format_name, record_count)
+                VALUES (?, ?, ?, ?)
+            ''', (import_date, file_name, 'モバイルPASMO', imported_count))
+            conn.commit()
+            conn.close()
+
+            if duplicate_count > 0:
+                QMessageBox.information(
+                    self, '重複スキップ',
+                    f'{duplicate_count}件の重複データはスキップされました。'
+                )
+
+            QMessageBox.information(
+                self, '取り込み完了',
+                f'{imported_count}件のPASMO明細を取り込みました。'
+            )
+            self.accept()
+
+        except Exception as e:
+            QMessageBox.critical(self, 'エラー', f'取り込み処理に失敗しました:\n{str(e)}')
+
 
 class ComprehensiveAnalysisWidget(BaseWidget):
     """全データを分析・可視化するウィジェット"""
@@ -7543,12 +7328,6 @@ class ComprehensiveAnalysisWidget(BaseWidget):
         
         self.category_goals_df = pd.read_sql_query(
             'SELECT * FROM category_goals ORDER BY year, month, category',
-            conn
-        )
-        
-        # 貯金目標データ
-        self.savings_goals_df = pd.read_sql_query(
-            'SELECT * FROM savings_goals ORDER BY start_date',
             conn
         )
         
@@ -8711,78 +8490,131 @@ class AssetManagementWidget(BaseWidget):
             
             if history_data and len(history_data) > 0:
                 print("チャート作成中...")
-                
-                series = QLineSeries()
-                series.setName("総資産")
-                
-                # シンプルなインデックスベースでデータを追加
+
+                # 上辺の線（データ） - selfに保持してGC防止
+                self._history_upper = QLineSeries()
+                # 下辺の線（y=0）
+                self._history_lower = QLineSeries()
+
                 for i, (record_date, total_balance) in enumerate(history_data):
-                    if total_balance is not None:
-                        series.append(i, total_balance)
-                        print(f"  データポイント追加: ({i}, {total_balance:,.0f})")
-                
-                # 線のスタイル設定
-                series.setColor(QColor("#667eea"))
-                pen = QPen()
+                    val = total_balance if total_balance is not None else 0
+                    self._history_upper.append(i, val)
+                    self._history_lower.append(i, 0)
+
+                # エリアシリーズ作成
+                area_series = QAreaSeries(self._history_upper, self._history_lower)
+                area_series.setName("総資産")
+
+                # 線の色（ティール系）
+                teal_color = QColor("#2d8a8a")
+                pen = QPen(teal_color)
                 pen.setWidth(3)
-                series.setPen(pen)
-                
-                chart.addSeries(series)
-                print("シリーズ追加完了")
-                
-                # X軸設定（シンプルな値軸を使用）
-                axis_x = QValueAxis()
-                axis_x.setRange(0, max(1, len(history_data) - 1))
-                axis_x.setTickCount(min(6, len(history_data)))
-                axis_x.setLabelFormat("%.0f")
+                area_series.setPen(pen)
+
+                # 塗りつぶし色（薄いティール）
+                fill_color = QColor("#2d8a8a")
+                fill_color.setAlpha(30)
+                area_series.setBrush(QBrush(fill_color))
+
+                chart.addSeries(area_series)
+
+                # --- X軸設定（年月ラベル） ---
+                axis_x = QCategoryAxis()
+                n = len(history_data)
+                axis_x.setRange(0, max(1, n - 1))
+
+                # 表示するラベル数を決定（4〜6個程度）
+                label_count = min(6, n)
+                if label_count >= 2:
+                    step = max(1, (n - 1) // (label_count - 1))
+                    indices = list(range(0, n, step))
+                    if indices[-1] != n - 1:
+                        indices.append(n - 1)
+                else:
+                    indices = [0]
+
+                for idx in indices:
+                    record_date = history_data[idx][0]
+                    # "YYYY-MM-DD" → "YYYY年M月"
+                    try:
+                        parts = record_date.split('-')
+                        year = int(parts[0])
+                        month = int(parts[1])
+                        label = f"{year}年{month}月"
+                    except (IndexError, ValueError):
+                        label = record_date
+                    axis_x.append(label, idx)
+
+                axis_x.setLabelsPosition(QCategoryAxis.AxisLabelsPositionOnValue)
+                # グリッド線スタイル
+                grid_pen_x = QPen(QColor("#dddddd"))
+                grid_pen_x.setStyle(Qt.DashLine)
+                axis_x.setGridLinePen(grid_pen_x)
                 chart.addAxis(axis_x, Qt.AlignBottom)
-                series.attachAxis(axis_x)
-                print("X軸設定完了")
-                
-                # Y軸設定
+                area_series.attachAxis(axis_x)
+
+                # --- Y軸設定（万単位ラベル） ---
                 values = [balance for _, balance in history_data if balance is not None]
                 if values:
-                    min_value = min(values)
                     max_value = max(values)
-                    print(f"Y軸範囲: {min_value:,.0f} - {max_value:,.0f}")
-                    
-                    if max_value > min_value:
-                        margin = (max_value - min_value) * 0.1
+
+                    # 万単位で適切な刻みを計算
+                    max_man = max_value / 10000
+                    if max_man <= 5:
+                        tick_man = 1
+                    elif max_man <= 10:
+                        tick_man = 2
+                    elif max_man <= 25:
+                        tick_man = 5
+                    elif max_man <= 50:
+                        tick_man = 10
+                    elif max_man <= 100:
+                        tick_man = 20
                     else:
-                        margin = max_value * 0.1
-                    
-                    axis_y = QValueAxis()
-                    axis_y.setRange(max(0, min_value - margin), max_value + margin)
-                    axis_y.setLabelFormat("%,.0f")
+                        tick_man = 50
+
+                    y_max_man = ((int(max_man) // tick_man) + 1) * tick_man + tick_man
+
+                    axis_y = QCategoryAxis()
+                    axis_y.setRange(0, y_max_man * 10000)
+
+                    val = tick_man
+                    while val <= y_max_man:
+                        axis_y.append(f"{val}万", val * 10000)
+                        val += tick_man
+
+                    axis_y.setLabelsPosition(QCategoryAxis.AxisLabelsPositionOnValue)
+                    # グリッド線スタイル
+                    grid_pen_y = QPen(QColor("#dddddd"))
+                    grid_pen_y.setStyle(Qt.DashLine)
+                    axis_y.setGridLinePen(grid_pen_y)
                     chart.addAxis(axis_y, Qt.AlignLeft)
-                    series.attachAxis(axis_y)
-                    print("Y軸設定完了")
-                
-                chart.setTitle(f"資産推移 ({period})")
-                print("チャートタイトル設定完了")
-                
+                    area_series.attachAxis(axis_y)
+
             else:
-                print("データがないため、空のチャートを作成")
-                # 空のチャートでも軸を設定
+                # 空のチャート
                 series = QLineSeries()
                 series.setName("データなし")
                 chart.addSeries(series)
-                
+
                 axis_x = QValueAxis()
                 axis_x.setRange(0, 1)
                 chart.addAxis(axis_x, Qt.AlignBottom)
                 series.attachAxis(axis_x)
-                
+
                 axis_y = QValueAxis()
                 axis_y.setRange(0, 1000000)
                 axis_y.setLabelFormat("%,.0f")
                 chart.addAxis(axis_y, Qt.AlignLeft)
                 series.attachAxis(axis_y)
-                
+
                 chart.setTitle("資産データがありません\n口座を追加して残高を入力してください")
-            
-            chart.legend().setVisible(True)
-            chart.legend().setAlignment(Qt.AlignBottom)
+
+            # スタイル設定
+            chart.legend().setVisible(False)
+            chart.setTitle("")
+            chart.setBackgroundRoundness(0)
+            chart.setMargins(QMargins(10, 10, 10, 10))
             
             print("チャートをビューに設定中...")
             self.history_chart_view.setChart(chart)
@@ -8800,8 +8632,8 @@ class AssetManagementWidget(BaseWidget):
             
             try:
                 conn.close()
-            except:
-                pass
+            except Exception as e:
+                print(f"DB接続クローズエラー: {e}")
         
         print("=== 資産推移チャート更新終了 ===")
 
@@ -8895,8 +8727,8 @@ class AssetManagementWidget(BaseWidget):
             print(f"履歴データ作成エラー: {e}")
             try:
                 conn.close()
-            except:
-                pass
+            except Exception as e:
+                print(f"DB接続クローズエラー: {e}")
 
     def record_daily_asset_history(self):
         """日次の資産履歴を記録（重複チェック付き）"""
@@ -8939,8 +8771,8 @@ class AssetManagementWidget(BaseWidget):
             print(f"日次履歴記録エラー: {e}")
             try:
                 conn.close()
-            except:
-                pass    
+            except Exception as e:
+                print(f"DB接続クローズエラー: {e}")    
 
     def setup_asset_composition_tab(self):
         """資産構成タブのUI（円グラフ）"""
