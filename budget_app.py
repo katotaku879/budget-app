@@ -43,7 +43,6 @@ import sqlite3
 import pandas as pd
 import os
 import sys
-import shutil
 import time
 import io
 import requests
@@ -792,10 +791,17 @@ class BudgetApp(QMainWindow):
         if auto_backup_enabled:
             try:
                 self.backup_manager.auto_backup(max_backups)
-                # メッセージを表示しない（完全に自動）
+                # 成功時はメッセージを表示しない（完全に自動）
             except Exception as e:
-                # エラーログにのみ記録
                 print(f"自動バックアップエラー: {e}")
+                # 失敗したことをユーザーに知らせる。
+                # 黙って失敗し続けると「バックアップがあると思っていたのに無かった」
+                # という最悪の事態につながるため、必ず画面で通知する
+                QMessageBox.warning(
+                    self, '自動バックアップ失敗',
+                    f'自動バックアップに失敗しました。\n\n{e}\n\n'
+                    'バックアップ管理画面から手動バックアップをお試しください。'
+                )
 
     def show_category_management(self):
         """カテゴリ管理ダイアログを表示"""
@@ -1720,8 +1726,14 @@ class IncomeExpenseWidget(BaseWidget):
                 with open(config_path, 'r', encoding='utf-8') as f:
                     config = _json.load(f)
                     url = config.get('sheet_url', '')
-            except Exception:
-                pass
+            except Exception as e:
+                # 設定ファイルが壊れて読めない場合はユーザーに知らせる。
+                # url が空のままなので、この後の既存フローでURL入力ダイアログが開く
+                QMessageBox.warning(
+                    self, '設定ファイル読込エラー',
+                    f'楽天PAYの設定ファイルが読み込めませんでした。\n\n{e}\n\n'
+                    'URLを再入力してください。'
+                )
 
         # URLが未設定なら入力ダイアログ
         if not url:
@@ -1737,8 +1749,14 @@ class IncomeExpenseWidget(BaseWidget):
             try:
                 with open(config_path, 'w', encoding='utf-8') as f:
                     _json.dump({'sheet_url': url}, f, ensure_ascii=False)
-            except Exception:
-                pass
+            except Exception as e:
+                # 保存に失敗しても取込処理は続行できるが、
+                # 次回また入力し直しになることをユーザーに知らせておく
+                QMessageBox.warning(
+                    self, '設定保存エラー',
+                    f'URLの保存に失敗しました。\n\n{e}\n\n'
+                    '取込は続行しますが、次回また入力が必要になります。'
+                )
 
         # ダイアログ作成
         dialog = CreditCardImportDialog(self)
@@ -4490,6 +4508,61 @@ class BackupManager:
         if not os.path.exists(backup_dir):
             os.makedirs(backup_dir)
     
+    def _copy_database(self, source_path, dest_path):
+        """SQLiteの公式バックアップ機能でデータベースを安全にコピーする
+
+        以前は shutil.copy2（ただのファイルコピー）を使っていたが、
+        アプリがDBに書き込んでいる最中にコピーすると壊れたコピーが
+        できる恐れがあった。SQLiteのbackup APIは書き込みの区切りを
+        見ながらコピーするので、いつ実行しても必ず正常なコピーになる。
+        """
+        src = sqlite3.connect(source_path)   # コピー元のDBを開く
+        dst = sqlite3.connect(dest_path)     # コピー先のDBを作る（無ければ新規作成）
+        try:
+            src.backup(dst)                  # SQLiteが安全にコピーしてくれる
+        finally:
+            # 成功・失敗にかかわらず必ず接続を閉じる
+            dst.close()
+            src.close()
+
+    def _validate_backup_file(self, backup_path):
+        """復元前にバックアップファイルが正常か検査する
+
+        壊れたファイルや空のファイルで本体DBを上書きしてしまうと
+        全データを失うため、復元処理の前に必ずこの検査を通す。
+        問題があれば Exception を投げて復元を中止する（本体DBには触らない）。
+        """
+        # 検査1: ファイルが存在して中身があるか
+        if not os.path.exists(backup_path):
+            raise Exception("バックアップファイルが見つかりません")
+        if os.path.getsize(backup_path) == 0:
+            raise Exception("バックアップファイルが空です。このファイルからは復元できません")
+
+        try:
+            # 検査2: 読み取り専用モードで開く（mode=ro は read only の意味。
+            # 検査のつもりでファイルを変更してしまう事故を防ぐ）
+            conn = sqlite3.connect(f"file:{backup_path}?mode=ro", uri=True)
+            try:
+                c = conn.cursor()
+
+                # 検査3: SQLite自身にファイルの整合性をチェックしてもらう
+                # 正常なら 'ok' という1行だけが返ってくる
+                result = c.execute("PRAGMA integrity_check").fetchone()
+                if result is None or result[0] != "ok":
+                    raise Exception("バックアップファイルが破損しています")
+
+                # 検査4: 家計簿アプリのDBかどうか（expensesテーブルの有無）を確認
+                c.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='expenses'"
+                )
+                if c.fetchone() is None:
+                    raise Exception("このファイルは家計簿アプリのバックアップではありません（expensesテーブルがありません）")
+            finally:
+                conn.close()
+        except sqlite3.DatabaseError:
+            # SQLiteとして開けない = データベースファイルではない
+            raise Exception("このファイルはデータベースファイルではないため復元できません")
+
     def create_backup(self, custom_name=None):
         """データベースのバックアップを作成"""
         try:
@@ -4499,29 +4572,33 @@ class BackupManager:
                 backup_name = f"{custom_name}_{timestamp}.db"
             else:
                 backup_name = f"budget_backup_{timestamp}.db"
-                
+
             backup_path = os.path.join(self.backup_dir, backup_name)
-            
-            # データベースファイルをコピー
-            shutil.copy2(self.db_path, backup_path)
-            
+
+            # SQLiteの安全なコピー機能でバックアップを作成
+            self._copy_database(self.db_path, backup_path)
+
             return backup_path
         except Exception as e:
             raise Exception(f"バックアップの作成に失敗しました: {str(e)}")
-    
+
     def restore_backup(self, backup_path):
         """バックアップからデータベースを復元"""
+        # 復元前にバックアップファイルを検査する。
+        # 壊れたファイルならここで例外になり、本体DBは一切変更されない
+        self._validate_backup_file(backup_path)
+
         try:
             # 現在のデータベースの自動バックアップを作成
             auto_backup_name = f"auto_backup_before_restore_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
             auto_backup_path = os.path.join(self.backup_dir, auto_backup_name)
-            
-            # 現在のDBをバックアップ
-            shutil.copy2(self.db_path, auto_backup_path)
-            
+
+            # 現在のDBをバックアップ（万一のとき元に戻せるように）
+            self._copy_database(self.db_path, auto_backup_path)
+
             # バックアップから復元
-            shutil.copy2(backup_path, self.db_path)
-            
+            self._copy_database(backup_path, self.db_path)
+
             return True
         except Exception as e:
             raise Exception(f"復元に失敗しました: {str(e)}")
@@ -5728,7 +5805,8 @@ class CreditCardImportDialog(QDialog):
         
         imported_count = 0
         duplicate_count = 0
-        
+        failed_count = 0  # 取込に失敗した行数（黙って欠落させないためカウントする）
+
         for item in data:
             date = item['date']
             category = item['category']
@@ -5758,17 +5836,27 @@ class CreditCardImportDialog(QDialog):
                 
             except Exception as e:
                 print(f"行の挿入中にエラー: {e}")
+                failed_count += 1  # 失敗を記録して次の行へ
                 continue
-        
+
         conn.commit()
         conn.close()
-        
+
         if duplicate_count > 0:
             QMessageBox.information(
                 self, '重複スキップ',
                 f'{duplicate_count}件の重複データはスキップされました。'
             )
-        
+
+        # 取込に失敗した行があればユーザーに知らせる。
+        # 黙って欠落させると「明細と合計が合わない」原因不明の不整合になるため
+        if failed_count > 0:
+            QMessageBox.warning(
+                self, '取込エラー',
+                f'{failed_count}件のデータが取り込めませんでした。\n'
+                '取込結果と元の明細を照合して確認してください。'
+            )
+
         return imported_count
     
     # インポート履歴の保存
@@ -7650,24 +7738,30 @@ class AssetManagementWidget(BaseWidget):
         )
         
         if reply == QMessageBox.Yes:
+            conn = sqlite3.connect('budget.db')
             try:
-                conn = sqlite3.connect('budget.db')
                 c = conn.cursor()
-                
+
                 # 履歴データも削除
                 c.execute('DELETE FROM asset_history WHERE asset_id = ?', (asset_id,))
-                
+
                 # 資産データ削除
                 c.execute('DELETE FROM assets WHERE id = ?', (asset_id,))
-                
+
+                # 2つの削除が両方成功したときだけ確定する
                 conn.commit()
-                conn.close()
-                
+
                 QMessageBox.information(self, '成功', '口座を削除しました')
                 self.load_assets()
-                
+
             except Exception as e:
+                # 途中で失敗したら rollback で削除を全部なかったことにする。
+                # これで「履歴だけ消えて口座が残る」ような中途半端な状態を防ぐ
+                conn.rollback()
                 QMessageBox.critical(self, 'エラー', f'削除中にエラーが発生しました: {str(e)}')
+            finally:
+                # 成功・失敗にかかわらず必ず接続を閉じる（閉じ忘れ防止）
+                conn.close()
     
     def update_bank_balance(self):
         """銀行口座残高を一括更新"""
