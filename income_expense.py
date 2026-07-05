@@ -530,7 +530,6 @@ class IncomeExpenseWidget(BaseWidget):
     def update_table(self):
         """テーブル更新（新システム専用）"""
         try:
-            print(f"=== update_table（新システム専用）===")
             
             # 古いシステムを完全無効化
             # self.is_updating = True
@@ -540,7 +539,7 @@ class IncomeExpenseWidget(BaseWidget):
             if hasattr(self, 'load_current_month_expenses'):
                 self.load_current_month_expenses()
             else:
-                print("新システムが利用できません")
+                pass
                 
         except Exception as e:
             print(f"update_table エラー: {e}")
@@ -578,13 +577,11 @@ class IncomeExpenseWidget(BaseWidget):
                 # Noneチェックを追加
                 id_item = self.expense_table.item(row, 0)
                 if id_item is None:
-                    print(f"警告: 行{row}のIDセルがNoneです")
                     return
                 expense_id = int(id_item.text())
                 
                 date_item = self.expense_table.item(row, 1)
                 if date_item is None:
-                    print(f"警告: 行{row}の日付セルがNoneです")
                     return
                 date = date_item.text()
                 
@@ -595,14 +592,12 @@ class IncomeExpenseWidget(BaseWidget):
                 else:
                     category_item = self.expense_table.item(row, 2)
                     if category_item is None:
-                        print(f"警告: 行{row}のカテゴリセルがNoneです")
                         return
                     category = category_item.text() if category_item else ''
                 
                 # 金額の処理を改善
                 amount_item = self.expense_table.item(row, 3)
                 if amount_item is None:
-                    print(f"警告: 行{row}の金額セルがNoneです")
                     return
                 amount_text = amount_item.text()
                 
@@ -621,7 +616,6 @@ class IncomeExpenseWidget(BaseWidget):
                 
                 description_item = self.expense_table.item(row, 4)
                 if description_item is None:
-                    print(f"警告: 行{row}の説明セルがNoneです")
                     return
                 description = description_item.text()
                 
@@ -632,7 +626,6 @@ class IncomeExpenseWidget(BaseWidget):
                     WHERE id = ?
                 ''', (date, category, amount, description, expense_id))
                 
-                print(f"データ更新成功: ID={expense_id}, 金額={amount}")  # デバッグ用
                 
                 # 表示を更新(金額編集時は少し待つ)
                 if column == 3:  # 金額列の場合
@@ -962,7 +955,6 @@ class IncomeExpenseWidget(BaseWidget):
     def load_current_month_expenses(self):
         """現在の月の支出データを読み込む（デバッグ強化版）"""
         try:
-            print(f"=== データ読み込み開始: {self.current_year}年{self.current_month}月 ===")
             
             conn = sqlite3.connect('budget.db')
             c = conn.cursor()
@@ -970,7 +962,6 @@ class IncomeExpenseWidget(BaseWidget):
             # まず全データを確認
             c.execute('SELECT COUNT(*) FROM expenses')
             total_count = c.fetchone()[0]
-            print(f"expenses テーブルの総レコード数: {total_count}")
             
             # 今月のデータを確認
             c.execute('''
@@ -979,7 +970,6 @@ class IncomeExpenseWidget(BaseWidget):
             ''', (str(self.current_year), f"{self.current_month:02d}"))
             
             month_count = c.fetchone()[0]
-            print(f"今月（{self.current_year}年{self.current_month}月）のレコード数: {month_count}")
             
             # 実際のデータを取得
             c.execute('''
@@ -992,24 +982,20 @@ class IncomeExpenseWidget(BaseWidget):
             self.current_expense_data = c.fetchall()
             conn.close()
             
-            print(f"実際に読み込まれたデータ: {len(self.current_expense_data)}件")
             
             # データ内容を詳細表示
             if self.current_expense_data:
-                print("=== 読み込まれたデータの詳細 ===")
                 for i, row in enumerate(self.current_expense_data):
-                    print(f"  {i+1}. ID:{row[0]}, 日付:{row[1]}, カテゴリ:{row[2]}, 金額:{row[3]}, 説明:{row[4]}")
+                    pass
             else:
-                print("=== データが0件です ===")
                 # 他の月のデータがあるか確認
                 conn = sqlite3.connect('budget.db')
                 c = conn.cursor()
                 c.execute('SELECT DISTINCT strftime("%Y-%m", date) FROM expenses ORDER BY date DESC LIMIT 5')
                 other_months = c.fetchall()
                 conn.close()
-                print("他の月のデータ:")
                 for month in other_months:
-                    print(f"  {month[0]}")
+                    pass
             
             # 表示更新
             self.update_expense_table_display()
@@ -1022,16 +1008,13 @@ class IncomeExpenseWidget(BaseWidget):
     def update_expense_table_display(self):
         """支出テーブルの表示を更新(安全版)"""
         try:
-            print("=== update_expense_table_display 開始(安全版) ===")
             
             # is_updatingフラグを設定
             self.is_updating = True
             
             # 全ての必要なウィジェットが存在します
-            print("全ての必要なウィジェットが存在します")
             
             # データ読み込み開始
-            print(f"=== データ読み込み開始: {self.current_year}年{self.current_month}月 ===")
             
             # データベースから支出データを取得
             query = '''
@@ -1043,23 +1026,17 @@ class IncomeExpenseWidget(BaseWidget):
             month_str = f'{self.current_month:02d}'
             all_data = execute_query(query, (str(self.current_year), month_str), fetch_all=True)
             
-            print(f"expensesテーブルの総レコード数: {len(all_data) if all_data else 0}")
-            print(f"今月({self.current_year}年{self.current_month}月)のレコード数: {len(all_data) if all_data else 0}")
             
             if all_data:
-                print(f"実際に読み込まれたデータ: {len(all_data)}件")
-                print("=== 読み込まれたデータの詳細 ===")
                 for i, row in enumerate(all_data[:5]):  # 最初の5件だけ表示
-                    print(f"  {i+1}. ID:{row[0]}, 日付:{row[1]}, カテゴリ:{row[2]}, 金額:{row[3]}, 説明:{row[4]}")
+                    pass
             
             # フィルタリング処理
             selected_category = self.filter_combo.currentText()
-            print(f"選択されたカテゴリ: '{selected_category}'")
 
             filtered_data = all_data
             if selected_category != '全てのカテゴリ':
                 filtered_data = [row for row in filtered_data if row[2] == selected_category]
-                print(f"カテゴリフィルタ後のデータ件数: {len(filtered_data)}")
 
             # キーワード検索フィルター
             search_text = self.search_input.text().strip().lower()
@@ -1085,37 +1062,29 @@ class IncomeExpenseWidget(BaseWidget):
             
             # 並び替えオプション
             sort_option = self.sort_combo.currentText()
-            print(f"並び替えオプション: '{sort_option}'")
 
             if sort_option == '日付順（新しい順）':  # 全角括弧に変更
                 filtered_data = sorted(filtered_data, key=lambda x: x[1], reverse=True)
-                print("日付順(新しい順)でソート完了")
             elif sort_option == '日付順（古い順）':  # 全角括弧に変更
                 filtered_data = sorted(filtered_data, key=lambda x: x[1])
-                print("日付順(古い順)でソート完了")
             elif sort_option == 'カテゴリ別':
                 self.is_updating = False
                 self.display_expenses_grouped_by_category(filtered_data)
-                print("=== update_expense_table_display 完了(カテゴリ別表示) ===")
                 return
             elif sort_option == '金額順（高い順）':  # 全角括弧に変更
                 filtered_data = sorted(filtered_data, key=lambda x: x[3], reverse=True)
-                print("金額順(高い順)でソート完了")
             elif sort_option == '金額順（安い順）':  # 全角括弧に変更
                 filtered_data = sorted(filtered_data, key=lambda x: x[3])
-                print("金額順(安い順)でソート完了")
             else:
-                print(f"⚠️ 不明な並び替えオプション: '{sort_option}'")
+                pass
             
             # 表示件数制限
             limit_text = self.limit_combo.currentText()
-            print(f"表示件数: '{limit_text}'")
             
             if limit_text != '全て':
                 limit = int(limit_text.replace('件', ''))
                 filtered_data = filtered_data[:limit]
             
-            print(f"最終データ件数: {len(filtered_data)}")
             
             # ここからが重要な修正部分
             # テーブルに安全にデータを設定
@@ -1133,10 +1102,8 @@ class IncomeExpenseWidget(BaseWidget):
                     print(f"カテゴリ取得エラー: {e}")
                     categories = get_categories()
                 
-                print("=== テーブルにデータを設定中 ===")
                 for row, row_data in enumerate(filtered_data):
                     if not row_data or len(row_data) < 5:
-                        print(f"行{row}: データが不完全です")
                         continue
                         
                     try:
@@ -1178,23 +1145,19 @@ class IncomeExpenseWidget(BaseWidget):
                         self.expense_table.setItem(row, 4, QTableWidgetItem(safe_description))
                         
                         if row < 5:  # 最初の5行だけログ出力
-                            print(f"行{row}設定: {safe_date} {safe_category} {safe_amount} {safe_description}")
+                            pass
                             
                     except Exception as e:
                         print(f"行{row}のデータ設定エラー: {e}")
-                        print(f"問題のデータ: {row_data}")
                         continue
                 
-                print(f"=== テーブル設定完了: {len(filtered_data)}行 ===")
             else:
                 self.expense_table.setRowCount(0)
-                print("表示するデータがありません")
 
             # カテゴリ合計を更新
             self.update_category_total_label(filtered_data, selected_category)
 
             self.is_updating = False
-            print("=== update_expense_table_display 完了(安全版) ===")
             
         except Exception as e:
             self.is_updating = False
@@ -1400,31 +1363,24 @@ class IncomeExpenseWidget(BaseWidget):
     def display_expenses_normal_table(self, data):
         """通常のテーブル表示（デバッグ強化版）"""
         try:
-            print(f"=== display_expenses_normal_table 開始 ===")
-            print(f"受け取ったデータ件数: {len(data) if data else 0}")
             
             if self.expense_table is None:
-                print("❌ expense_table が None です")
                 return
                 
-            print(f"テーブルの行数を設定: {len(data)}行")
             
             # スパンをクリア
             self.expense_table.clearSpans()
             
             if not data:
-                print("データが空のため、テーブルを空にします")
                 return
             
             for row, row_data in enumerate(data):
                 if not row_data or len(row_data) < 5:
-                    print(f"❌ 行 {row}: データが不完全です - {row_data}")
                     continue
                     
                 try:
                     exp_id, date, category, amount, description = row_data
                     
-                    print(f"行 {row} 設定中: ID:{exp_id}, 日付:{date}, カテゴリ:{category}, 金額:{amount}")
                     
                     # 安全にアイテムを設定
                     self.expense_table.setItem(row, 0, QTableWidgetItem(str(exp_id or '')))
@@ -1433,12 +1389,10 @@ class IncomeExpenseWidget(BaseWidget):
                     self.expense_table.setItem(row, 3, QTableWidgetItem(f"{amount or 0:,.0f}円"))
                     self.expense_table.setItem(row, 4, QTableWidgetItem(str(description or '')))
                     
-                    print(f"✅ 行 {row} 設定完了")
                     
                 except Exception as e:
                     print(f"❌ 行 {row} の設定エラー: {e}")
                     
-            print(f"=== display_expenses_normal_table 完了 ===")
                     
         except Exception as e:
             print(f"❌ display_expenses_normal_table エラー: {e}")

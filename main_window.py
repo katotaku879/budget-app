@@ -325,7 +325,7 @@ class BudgetApp(QMainWindow):
                         button_layout.addWidget(button)
                 except Exception as e:
                     # 失敗した場合は警告を出すだけにする
-                    print(f"Warning: Could not add button to {type(widget).__name__}: {e}")
+                    pass
         except Exception as e:
             print(f"Error adding button to {type(widget).__name__}: {e}")    
 
