@@ -23,6 +23,24 @@ import sqlite3
 from db_utils import get_categories
 
 
+# グラフ用の共通カラーパレット
+# 各画面の円グラフ・棒グラフはこのリストを使う。
+# 配色を変えたいときはここを1箇所直せば全画面に反映される
+CHART_PALETTE = [
+    '#FF6B6B',  # 赤
+    '#4ECDC4',  # ターコイズ
+    '#45B7D1',  # 青
+    '#96CEB4',  # 薄緑
+    '#FFEEAD',  # クリーム
+    '#FFD93D',  # 黄色
+    '#6C5B7B',  # 紫
+    '#F7A072',  # オレンジ
+    '#C06C84',  # ピンク
+    '#95A5A6',  # グレー
+    '#2ECC71',  # エメラルド
+]
+
+
 # 年月処理の共通クラス
 class DateHelper:
     @staticmethod

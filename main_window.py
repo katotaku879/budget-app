@@ -3,8 +3,7 @@
 
 全画面の生成・ナビゲーション・DB初期化・自動バックアップを担当する。"""
 from PyQt5.QtWidgets import QMainWindow, QMessageBox, QStackedWidget, QAction
-import sqlite3
-from db_utils import execute_query, execute_many
+from db_utils import execute_query, execute_many, get_categories
 from backup import BackupManager, BackupSettingsDialog, BackupManagerDialog
 from category_management import CategoryManagementDialog
 from income_expense import IncomeExpenseWidget
@@ -326,7 +325,7 @@ class BudgetApp(QMainWindow):
                         button_layout.addWidget(button)
                 except Exception as e:
                     # 失敗した場合は警告を出すだけにする
-                    print(f"Warning: Could not add button to {type(widget).__name__}: {e}")
+                    pass
         except Exception as e:
             print(f"Error adding button to {type(widget).__name__}: {e}")    
 
@@ -385,24 +384,17 @@ class BudgetApp(QMainWindow):
                 print(f"入出金画面の更新中にエラー: {e}")
         
         # 2. 収支内訳画面の目標関連表示を更新
+        # （update_displayに一本化済みなのでenhanced系の分岐は不要になった）
         if hasattr(self, 'breakdown_widget'):
             try:
-                # enhanced_update_displayがあればそれを使用、なければ通常のupdate_displayを使用
-                if hasattr(self.breakdown_widget, 'enhanced_update_display'):
-                    self.breakdown_widget.enhanced_update_display()
-                elif hasattr(self.breakdown_widget, 'update_display'):
-                    self.breakdown_widget.update_display()
+                self.breakdown_widget.update_display()
             except Exception as e:
                 print(f"収支内訳画面の更新中にエラー: {e}")
-        
+
         # 3. 月次レポート画面の目標関連表示を更新
         if hasattr(self, 'monthly_report_widget'):
             try:
-                # enhanced_update_report_displayがあればそれを使用、なければ通常のupdate_displayを使用
-                if hasattr(self.monthly_report_widget, 'enhanced_update_report_display'):
-                    self.monthly_report_widget.enhanced_update_report_display()
-                elif hasattr(self.monthly_report_widget, 'update_display'):
-                    self.monthly_report_widget.update_display()
+                self.monthly_report_widget.update_display()
             except Exception as e:
                 print(f"月次レポート画面の更新中にエラー: {e}")
         
@@ -424,15 +416,9 @@ class BudgetApp(QMainWindow):
         if hasattr(self, 'income_expense_widget') and hasattr(self.income_expense_widget, 'category_input'):
             current_category = self.income_expense_widget.category_input.currentText()
             self.income_expense_widget.category_input.clear()
-            # Retrieve categories from the database
-            conn = sqlite3.connect('budget.db')
-            c = conn.cursor()
-            c.execute('SELECT name FROM categories ORDER BY sort_order')
-            categories = [row[0] for row in c.fetchall()]
-            conn.close()
 
-            # Add categories to the combo box
-            self.income_expense_widget.category_input.addItems(categories)
+            # カテゴリ一覧を共通関数で取得してコンボボックスに反映
+            self.income_expense_widget.category_input.addItems(get_categories())
             
             # 以前選択されていたカテゴリを再選択（存在する場合）
             index = self.income_expense_widget.category_input.findText(current_category)

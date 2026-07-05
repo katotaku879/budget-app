@@ -460,10 +460,8 @@ class AssetManagementWidget(BaseWidget):
     
     def update_history_chart(self):
         """資産推移チャートを更新（診断・修正版）"""
-        print("=== 資産推移チャート更新開始 ===")
         
         period = self.period_combo.currentText()
-        print(f"選択期間: {period}")
         
         # 期間に応じた日数を計算
         if period == '過去3ヶ月':
@@ -475,7 +473,6 @@ class AssetManagementWidget(BaseWidget):
         else:  # 全期間
             days = None
         
-        print(f"フィルタ日数: {days}")
         
         # データベース接続
         conn = sqlite3.connect('budget.db')
@@ -485,23 +482,19 @@ class AssetManagementWidget(BaseWidget):
             # まず現在の資産データを確認
             c.execute('SELECT COUNT(*) FROM assets WHERE balance > 0')
             asset_count = c.fetchone()[0]
-            print(f"資産テーブルのレコード数: {asset_count}")
             
             if asset_count > 0:
                 c.execute('SELECT account_name, balance FROM assets WHERE balance > 0')
                 assets = c.fetchall()
-                print("現在の資産:")
                 for name, balance in assets:
-                    print(f"  {name}: {balance:,.0f}円")
+                    pass
             
             # 履歴テーブルの確認
             c.execute('SELECT COUNT(*) FROM asset_history')
             history_count = c.fetchone()[0]
-            print(f"履歴テーブルのレコード数: {history_count}")
             
             # 履歴データがない場合の初期化
             if history_count == 0 and asset_count > 0:
-                print("履歴データがないため、現在のデータから初期化中...")
                 today = datetime.now().strftime('%Y-%m-%d')
                 
                 c.execute('SELECT id, balance FROM assets WHERE balance > 0')
@@ -512,10 +505,8 @@ class AssetManagementWidget(BaseWidget):
                         INSERT INTO asset_history (asset_id, record_date, balance)
                         VALUES (?, ?, ?)
                     ''', (asset_id, today, balance))
-                    print(f"  資産ID {asset_id} の履歴を作成: {balance:,.0f}円")
                 
                 conn.commit()
-                print("履歴データ初期化完了")
             
             # 履歴データを取得
             if days:
@@ -537,12 +528,10 @@ class AssetManagementWidget(BaseWidget):
                 c.execute(query)
             
             history_data = c.fetchall()
-            print(f"取得した履歴データ数: {len(history_data)}")
             
             if history_data:
-                print("履歴データ:")
                 for date, balance in history_data:
-                    print(f"  {date}: {balance:,.0f}円")
+                    pass
             
             conn.close()
             
@@ -551,7 +540,6 @@ class AssetManagementWidget(BaseWidget):
             chart.setAnimationOptions(QChart.SeriesAnimations)
             
             if history_data and len(history_data) > 0:
-                print("チャート作成中...")
 
                 # 上辺の線（データ） - selfに保持してGC防止
                 self._history_upper = QLineSeries()
@@ -678,9 +666,7 @@ class AssetManagementWidget(BaseWidget):
             chart.setBackgroundRoundness(0)
             chart.setMargins(QMargins(10, 10, 10, 10))
             
-            print("チャートをビューに設定中...")
             self.history_chart_view.setChart(chart)
-            print("チャート設定完了")
             
         except Exception as e:
             print(f"エラー発生: {e}")
@@ -697,7 +683,6 @@ class AssetManagementWidget(BaseWidget):
             except Exception as e:
                 print(f"DB接続クローズエラー: {e}")
         
-        print("=== 資産推移チャート更新終了 ===")
 
     def create_initial_asset_history(self):
         """現在の資産データから初期履歴データを作成（重複チェック付き）"""
@@ -712,7 +697,6 @@ class AssetManagementWidget(BaseWidget):
             existing_count = c.fetchone()[0]
             
             if existing_count > 0:
-                print(f"今日（{today}）の履歴データは既に存在します。スキップします。")
                 conn.close()
                 return
             
@@ -736,10 +720,8 @@ class AssetManagementWidget(BaseWidget):
                             INSERT INTO asset_history (asset_id, record_date, balance)
                             VALUES (?, ?, ?)
                         ''', (asset_id, today, balance))
-                        print(f"  資産ID {asset_id} の履歴を作成: {balance:,.0f}円")
                     
                     conn.commit()
-                    print("履歴データ初期化完了")
             
             conn.close()
             
@@ -763,7 +745,6 @@ class AssetManagementWidget(BaseWidget):
             existing_count = c.fetchone()[0]
             
             if existing_count > 0:
-                print(f"今日（{today}）の履歴は既に記録済みです")
                 conn.close()
                 return
             
@@ -783,7 +764,6 @@ class AssetManagementWidget(BaseWidget):
                     ''', (asset_id, today, balance))
                 
                 conn.commit()
-                print(f"日次履歴を記録しました（{len(assets)}件）")
             
             conn.close()
             

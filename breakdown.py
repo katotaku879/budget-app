@@ -15,9 +15,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import QFont, QColor
 from PyQt5.QtChart import QChart, QChartView, QPieSeries, QPieSlice
-import sqlite3
 from db_utils import execute_query, fetch_df
-from common import DateHelper, BaseWidget, YearMonthDialog
+from common import DateHelper, BaseWidget, YearMonthDialog, CHART_PALETTE
 
 
 class BreakdownWidget(BaseWidget):
@@ -113,6 +112,11 @@ class BreakdownWidget(BaseWidget):
         return income_result[0] if income_result else 0, df
 
     def update_display(self):
+        """収支・カテゴリ別テーブル（目標列つき）・円グラフを更新する
+
+        以前は「目標列なしの旧版」と「目標列ありのenhanced版」が併存し、
+        月切替と目標更新で表示が食い違っていたため、目標列あり版に一本化した。
+        """
         income, expense_df = self.load_monthly_data()
         
         # 収入表示の更新
@@ -126,84 +130,12 @@ class BreakdownWidget(BaseWidget):
         balance = income - total_expense
         self.monthly_balance_label.setText(f"{balance:,.0f} 円")
         
-        # テーブルの更新
-        self.category_table.setRowCount(len(expense_df))
-        
-        # 見やすい色のリストを定義
-        colors = [
-            '#FF6B6B',  # 赤
-            '#4ECDC4',  # ターコイズ
-            '#45B7D1',  # 青
-            '#96CEB4',  # 薄緑
-            '#FFEEAD',  # クリーム
-            '#FFD93D',  # 黄色
-            '#6C5B7B',  # 紫
-            '#F7A072',  # オレンジ
-            '#C06C84',  # ピンク
-            '#95A5A6',  # グレー
-            '#2ECC71',  # エメラルド
-        ]
-        
-        # 円グラフの作成
-        series = QPieSeries()
-        
-        for idx, row in expense_df.iterrows():
-            category = row['category']
-            amount = row['total_amount']
-            percentage = (amount / total_expense * 100) if total_expense > 0 else 0
-            
-            # テーブルに行を追加
-            self.category_table.setItem(idx, 0, QTableWidgetItem(category))
-            self.category_table.setItem(idx, 1, QTableWidgetItem(f"{amount:,.0f}"))
-            self.category_table.setItem(idx, 2, QTableWidgetItem(f"{percentage:.1f}%"))
-            
-            # 円グラフにデータを追加
-            slice = series.append(f"{category}", amount)
-            slice.setLabel(f"{category}\n{percentage:.1f}%")
-            slice.setLabelVisible(True)
-            
-            # カラーの設定
-            color_idx = idx % len(colors)
-            slice.setColor(QColor(colors[color_idx]))
-            
-            # ラベルの位置を調整（スライスの中心に配置）
-            slice.setLabelPosition(QPieSlice.LabelInsideHorizontal)
-
-        # 円グラフの更新
-        chart = QChart()
-        chart.addSeries(series)
-        chart.setTitle(f"{self.current_year}年{self.current_month}月 支出内訳")
-        chart.legend().hide()  # 凡例を非表示（ラベルで十分な情報を表示するため）
-        self.chart_view.setChart(chart)
-        
-        # グラフの更新
-        chart = self.create_pie_chart(expense_df, total_expense)
-        self.chart_view.setChart(chart)
-
-    def enhanced_update_display(self):
-        income, expense_df = self.load_monthly_data()
-        
-        # 収入表示の更新
-        self.monthly_income_input.setText(f"{income:,.0f}")
-        
-        # 総支出の計算と表示
-        total_expense = expense_df['total_amount'].sum() if not expense_df.empty else 0
-        self.monthly_expense_label.setText(f"{total_expense:,.0f} 円")
-        
-        # 収支の計算と表示
-        balance = income - total_expense
-        self.monthly_balance_label.setText(f"{balance:,.0f} 円")
-        
-        # カテゴリ別目標を取得
-        conn = sqlite3.connect('budget.db')
-        c = conn.cursor()
-        c.execute('''
+        # カテゴリ別目標を取得（共通ヘルパー経由なので接続の閉じ忘れがない）
+        rows = execute_query('''
             SELECT category, goal_amount FROM category_goals
             WHERE year = ? AND month = ?
-        ''', (self.current_year, self.current_month))
-        
-        category_goals = {category: amount for category, amount in c.fetchall()}
-        conn.close()
+        ''', (self.current_year, self.current_month), fetch_all=True)
+        category_goals = {category: amount for category, amount in (rows or [])}
         
         # テーブルを更新（目標情報も含める）
         self.category_table.setRowCount(len(expense_df))
@@ -239,69 +171,17 @@ class BreakdownWidget(BaseWidget):
         chart = self.create_enhanced_pie_chart(expense_df, total_expense, category_goals)
         self.chart_view.setChart(chart)
 
-     
-
-    def create_pie_chart(self, expense_df, total_expense):
-        """円グラフを作成"""
-        chart = QChart()
-        chart.setAnimationOptions(QChart.SeriesAnimations)
-        
-        # 円グラフのデータを作成
-        series = QPieSeries()
-        
-        # カラーリスト（異なる色を用意）
-        colors = [
-            '#FF6B6B',  # 赤
-            '#4ECDC4',  # ターコイズ
-            '#45B7D1',  # 青
-            '#96CEB4',  # 薄緑
-            '#FFEEAD',  # クリーム
-            '#FFD93D',  # 黄色
-            '#6C5B7B',  # 紫
-            '#F7A072',  # オレンジ
-            '#C06C84',  # ピンク
-            '#95A5A6',  # グレー
-            '#2ECC71',  # エメラルド
-        ]
-        
-        # カテゴリごとのデータを追加
-        if not expense_df.empty:
-            for idx, row in expense_df.iterrows():
-                percentage = (row['total_amount'] / total_expense * 100) if total_expense > 0 else 0
-                slice = series.append(
-                    f"{row['category']}\n{percentage:.1f}%",
-                    row['total_amount']
-                )
-                # カラーを設定
-                color_idx = idx % len(colors)
-                slice.setColor(QColor(colors[color_idx]))
-                # ラベルを表示
-                slice.setLabelVisible(True)
-                slice.setLabelPosition(QPieSlice.LabelInsideHorizontal)
-
-        # グラフにデータを追加
-        chart.addSeries(series)
-        chart.setTitle(f"{self.current_year}年{self.current_month}月 支出内訳")
-        
-        # 凡例を非表示（ラベルで十分な情報を表示するため）
-        chart.legend().hide()
-        
-        return chart    
-
     def create_enhanced_pie_chart(self, expense_df, total_expense, category_goals):
         """カテゴリ別支出と目標を表示する円グラフを作成"""
         chart = QChart()
         chart.setAnimationOptions(QChart.SeriesAnimations)
-        
+
         # 円グラフのデータを作成
         series = QPieSeries()
-        
-        # カラーリスト
-        colors = [
-            '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEEAD',
-            '#FFD93D', '#6C5B7B', '#F7A072', '#C06C84', '#95A5A6', '#2ECC71'
-        ]
-        
+
+        # カラーリスト（全画面共通のパレットを使用）
+        colors = CHART_PALETTE
+
         # カテゴリごとのデータを追加
         if not expense_df.empty:
             for idx, row in expense_df.iterrows():
