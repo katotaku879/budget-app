@@ -3,19 +3,21 @@
 
 口座の追加・編集・残高一括更新。資産管理画面から呼ばれる。"""
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QDialog, QMessageBox,
-    QPushButton, QLabel, QLineEdit, QTextEdit, QComboBox, QCheckBox, QSpinBox,
-    QDateEdit, QCalendarWidget,
-    QTableWidget, QTableWidgetItem, QHeaderView,
-    QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QFrame,
-    QScrollArea, QStackedWidget, QTabWidget, QListWidget, QListWidgetItem,
-    QAction, QFileDialog, QDialogButtonBox, QProgressBar, QProgressDialog,
-    QSizePolicy, QSpacerItem, QInputDialog
+    QDialog,
+    QMessageBox,
+    QPushButton,
+    QLabel,
+    QLineEdit,
+    QComboBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QVBoxLayout,
+    QHBoxLayout,
+    QFormLayout
 )
-from PyQt5.QtCore import Qt, QDate, QMargins, QPointF
-from PyQt5.QtGui import QFont, QColor, QPen, QBrush
+from PyQt5.QtCore import QDate
 import sqlite3
-from db_utils import get_db_connection, execute_query, get_categories, execute_many, fetch_df
 
 
 class AddAccountDialog(QDialog):

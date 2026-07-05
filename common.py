@@ -3,20 +3,24 @@
 
 日付ヘルパー・全画面の基底ウィジェット・共用ダイアログ。"""
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QDialog, QMessageBox,
-    QPushButton, QLabel, QLineEdit, QTextEdit, QComboBox, QCheckBox, QSpinBox,
-    QDateEdit, QCalendarWidget,
-    QTableWidget, QTableWidgetItem, QHeaderView,
-    QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QFrame,
-    QScrollArea, QStackedWidget, QTabWidget, QListWidget, QListWidgetItem,
-    QAction, QFileDialog, QDialogButtonBox, QProgressBar, QProgressDialog,
-    QSizePolicy, QSpacerItem, QInputDialog
+    QWidget,
+    QDialog,
+    QMessageBox,
+    QPushButton,
+    QLineEdit,
+    QComboBox,
+    QSpinBox,
+    QCalendarWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QVBoxLayout,
+    QHBoxLayout,
+    QFormLayout
 )
-from PyQt5.QtCore import Qt, QDate, QMargins, QPointF
-from PyQt5.QtGui import QFont, QColor, QPen, QBrush
+from PyQt5.QtCore import Qt, QDate
 import sqlite3
-from datetime import datetime, timedelta
-from db_utils import get_db_connection, execute_query, get_categories, execute_many, fetch_df
+from db_utils import get_categories
 
 
 # 年月処理の共通クラス

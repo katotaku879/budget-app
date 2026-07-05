@@ -3,29 +3,34 @@
 
 全期間の支出データを統計・グラフ・レポートで多角的に分析する。"""
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QDialog, QMessageBox,
-    QPushButton, QLabel, QLineEdit, QTextEdit, QComboBox, QCheckBox, QSpinBox,
-    QDateEdit, QCalendarWidget,
-    QTableWidget, QTableWidgetItem, QHeaderView,
-    QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QFrame,
-    QScrollArea, QStackedWidget, QTabWidget, QListWidget, QListWidgetItem,
-    QAction, QFileDialog, QDialogButtonBox, QProgressBar, QProgressDialog,
-    QSizePolicy, QSpacerItem, QInputDialog
+    QWidget,
+    QDialog,
+    QMessageBox,
+    QPushButton,
+    QLabel,
+    QTextEdit,
+    QComboBox,
+    QCheckBox,
+    QDateEdit,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QVBoxLayout,
+    QHBoxLayout,
+    QFormLayout,
+    QGroupBox,
+    QFrame,
+    QTabWidget,
+    QFileDialog
 )
-from PyQt5.QtCore import Qt, QDate, QMargins, QPointF
-from PyQt5.QtGui import QFont, QColor, QPen, QBrush
-from PyQt5.QtChart import (
-    QChart, QChartView, QPieSeries, QPieSlice, QBarSeries,
-    QBarSet, QValueAxis, QBarCategoryAxis, QLineSeries,
-    QAreaSeries, QCategoryAxis
-)
+from PyQt5.QtCore import Qt, QDate
+from PyQt5.QtGui import QColor, QPen
+from PyQt5.QtChart import QChart, QChartView, QPieSeries, QLineSeries
 import sqlite3
 import pandas as pd
-import os
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
-from db_utils import get_db_connection, execute_query, get_categories, execute_many, fetch_df
-from common import DateHelper, BaseWidget, YearMonthDialog, EditableTableItem, RecurringExpenseDialog
+from common import BaseWidget
 
 
 class ComprehensiveAnalysisWidget(BaseWidget):

@@ -3,27 +3,38 @@
 
 楽天カード/楽天PAY/PayPay等のCSV取込。URL経由のGoogle Sheets取得にも対応。"""
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QDialog, QMessageBox,
-    QPushButton, QLabel, QLineEdit, QTextEdit, QComboBox, QCheckBox, QSpinBox,
-    QDateEdit, QCalendarWidget,
-    QTableWidget, QTableWidgetItem, QHeaderView,
-    QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QFrame,
-    QScrollArea, QStackedWidget, QTabWidget, QListWidget, QListWidgetItem,
-    QAction, QFileDialog, QDialogButtonBox, QProgressBar, QProgressDialog,
-    QSizePolicy, QSpacerItem, QInputDialog
+    QWidget,
+    QDialog,
+    QMessageBox,
+    QPushButton,
+    QLabel,
+    QLineEdit,
+    QTextEdit,
+    QComboBox,
+    QCheckBox,
+    QSpinBox,
+    QDateEdit,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QVBoxLayout,
+    QHBoxLayout,
+    QFormLayout,
+    QGroupBox,
+    QStackedWidget,
+    QListWidget,
+    QListWidgetItem,
+    QFileDialog,
+    QInputDialog
 )
-from PyQt5.QtCore import Qt, QDate, QMargins, QPointF
-from PyQt5.QtGui import QFont, QColor, QPen, QBrush
+from PyQt5.QtCore import Qt, QDate
 import sqlite3
 import pandas as pd
-import os
-from datetime import datetime, timedelta
 import json
 import csv
 import io
 import requests
-from db_utils import get_db_connection, execute_query, get_categories, execute_many, fetch_df
-from common import DateHelper, BaseWidget, YearMonthDialog, EditableTableItem, RecurringExpenseDialog
+from db_utils import get_categories
 
 
 class CreditCardImportDialog(QDialog):

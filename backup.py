@@ -3,17 +3,19 @@
 
 SQLite backup APIによる安全なバックアップ作成・検証付き復元と設定/管理ダイアログ。"""
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QDialog, QMessageBox,
-    QPushButton, QLabel, QLineEdit, QTextEdit, QComboBox, QCheckBox, QSpinBox,
-    QDateEdit, QCalendarWidget,
-    QTableWidget, QTableWidgetItem, QHeaderView,
-    QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QFrame,
-    QScrollArea, QStackedWidget, QTabWidget, QListWidget, QListWidgetItem,
-    QAction, QFileDialog, QDialogButtonBox, QProgressBar, QProgressDialog,
-    QSizePolicy, QSpacerItem, QInputDialog
+    QDialog,
+    QMessageBox,
+    QPushButton,
+    QLabel,
+    QCheckBox,
+    QSpinBox,
+    QVBoxLayout,
+    QHBoxLayout,
+    QListWidget,
+    QListWidgetItem,
+    QFileDialog
 )
-from PyQt5.QtCore import Qt, QDate, QMargins, QPointF
-from PyQt5.QtGui import QFont, QColor, QPen, QBrush
+from PyQt5.QtCore import Qt
 import sqlite3
 import os
 from datetime import datetime

@@ -3,23 +3,36 @@
 
 支出の入力・編集・削除、収入登録、各種明細取込の入り口。"""
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QDialog, QMessageBox,
-    QPushButton, QLabel, QLineEdit, QTextEdit, QComboBox, QCheckBox, QSpinBox,
-    QDateEdit, QCalendarWidget,
-    QTableWidget, QTableWidgetItem, QHeaderView,
-    QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QFrame,
-    QScrollArea, QStackedWidget, QTabWidget, QListWidget, QListWidgetItem,
-    QAction, QFileDialog, QDialogButtonBox, QProgressBar, QProgressDialog,
-    QSizePolicy, QSpacerItem, QInputDialog
+    QApplication,
+    QDialog,
+    QMessageBox,
+    QPushButton,
+    QLabel,
+    QLineEdit,
+    QComboBox,
+    QDateEdit,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QVBoxLayout,
+    QHBoxLayout,
+    QFormLayout,
+    QGroupBox,
+    QFrame,
+    QFileDialog,
+    QDialogButtonBox,
+    QProgressBar,
+    QProgressDialog,
+    QInputDialog
 )
-from PyQt5.QtCore import Qt, QDate, QMargins, QPointF
-from PyQt5.QtGui import QFont, QColor, QPen, QBrush
+from PyQt5.QtCore import Qt, QDate
+from PyQt5.QtGui import QFont, QColor
 import sqlite3
 import pandas as pd
 import os
-from datetime import datetime, timedelta
-from db_utils import get_db_connection, execute_query, get_categories, execute_many, fetch_df
-from common import DateHelper, BaseWidget, YearMonthDialog, EditableTableItem, RecurringExpenseDialog
+from datetime import datetime
+from db_utils import execute_query, get_categories
+from common import DateHelper, BaseWidget, YearMonthDialog, RecurringExpenseDialog
 from credit_card_import import CreditCardImportDialog
 from pasmo_import import PasmoImportDialog
 

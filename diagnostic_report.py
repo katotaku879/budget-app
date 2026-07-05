@@ -3,28 +3,32 @@
 
 健全性スコア・改善ポイント・将来予測を表示する。"""
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QDialog, QMessageBox,
-    QPushButton, QLabel, QLineEdit, QTextEdit, QComboBox, QCheckBox, QSpinBox,
-    QDateEdit, QCalendarWidget,
-    QTableWidget, QTableWidgetItem, QHeaderView,
-    QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QFrame,
-    QScrollArea, QStackedWidget, QTabWidget, QListWidget, QListWidgetItem,
-    QAction, QFileDialog, QDialogButtonBox, QProgressBar, QProgressDialog,
-    QSizePolicy, QSpacerItem, QInputDialog
+    QWidget,
+    QMessageBox,
+    QPushButton,
+    QLabel,
+    QComboBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QVBoxLayout,
+    QHBoxLayout,
+    QFrame,
+    QTabWidget
 )
-from PyQt5.QtCore import Qt, QDate, QMargins, QPointF
-from PyQt5.QtGui import QFont, QColor, QPen, QBrush
+from PyQt5.QtCore import Qt, QDate
+from PyQt5.QtGui import QColor
 from PyQt5.QtChart import (
-    QChart, QChartView, QPieSeries, QPieSlice, QBarSeries,
-    QBarSet, QValueAxis, QBarCategoryAxis, QLineSeries,
-    QAreaSeries, QCategoryAxis
+    QChart,
+    QChartView,
+    QBarSeries,
+    QBarSet,
+    QValueAxis,
+    QBarCategoryAxis,
+    QLineSeries
 )
-import sqlite3
-import pandas as pd
-import os
-from datetime import datetime, timedelta
-from db_utils import get_db_connection, execute_query, get_categories, execute_many, fetch_df
-from common import DateHelper, BaseWidget, YearMonthDialog, EditableTableItem, RecurringExpenseDialog
+from db_utils import execute_query, fetch_df
+from common import DateHelper, BaseWidget
 
 
 class DiagnosticReportWidget(BaseWidget):
