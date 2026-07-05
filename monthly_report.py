@@ -95,55 +95,6 @@ class MonthlyReportWidget(BaseWidget):
 
         self.setLayout(layout)
 
-    def update_table(self, months_data):
-        # 全期間のカテゴリを取得
-        all_categories = set()
-        for data in months_data:
-            all_categories.update(data['expenses_by_category'].keys())
-        all_categories = sorted(list(all_categories))
-        
-        # テーブルの設定
-        self.summary_table.clear()
-        row_count = len(all_categories) + 3  # カテゴリ + 収入行 + 支出合計行 + 収支合計行
-        col_count = len(months_data)
-        self.summary_table.setRowCount(row_count)
-        self.summary_table.setColumnCount(col_count)
-        
-        # ヘッダーの設定
-        headers = [f"{data['year']}/{data['month']}" for data in months_data]
-        self.summary_table.setHorizontalHeaderLabels(headers)
-        
-        # データの設定
-        for col, data in enumerate(months_data):
-            # 収入行
-            income_item = QTableWidgetItem(f"{data['income']:,.0f}")
-            self.summary_table.setItem(0, col, income_item)
-            
-            # カテゴリ別支出
-            for row, category in enumerate(all_categories, 1):
-                amount = data['expenses_by_category'].get(category, 0)
-                item = QTableWidgetItem(f"{amount:,.0f}")
-                self.summary_table.setItem(row, col, item)
-            
-            # 支出合計行
-            total_expense_item = QTableWidgetItem(f"{data['total_expense']:,.0f}")
-            self.summary_table.setItem(row_count-2, col, total_expense_item)
-            
-            # 収支合計行
-            balance_item = QTableWidgetItem(f"{data['balance']:,.0f}")
-            balance_item.setBackground(
-                QColor("#FFE4E1") if data['balance'] < 0 else QColor("#E0FFFF")
-            )
-            self.summary_table.setItem(row_count-1, col, balance_item)
-        
-        # 行ラベルの設定
-        row_labels = ['収入'] + list(all_categories) + ['支出合計', '収支合計']
-        self.summary_table.setVerticalHeaderLabels(row_labels)
-        
-        # セルの幅を調整
-        self.summary_table.resizeColumnsToContents()
-        self.summary_table.resizeRowsToContents()
-
     def show_prev_month(self):
         self.current_year, self.current_month = DateHelper.get_prev_month(self.current_year, self.current_month)
         self.display_year = self.current_year
@@ -156,92 +107,29 @@ class MonthlyReportWidget(BaseWidget):
         self.display_month = self.current_month
         self.update_display()
 
-    def get_6month_data(self):
-        """現在の月を含む前後6ヶ月分のデータを取得"""
-        conn = sqlite3.connect('budget.db')
-        months_data = []
-        
-        # 開始月と終了月を計算
-        start_date = QDate(self.display_year, self.display_month, 1).addMonths(-5)
-        end_date = QDate(self.display_year, self.display_month, 1)
-        
-        current_date = start_date
-        while current_date <= end_date:
-            year = current_date.year()
-            month = current_date.month()
-            
-            # 収入データの取得
-            c = conn.cursor()
-            c.execute('''
-                SELECT income FROM monthly_income 
-                WHERE year = ? AND month = ?
-            ''', (year, month))
-            income_result = c.fetchone()
-            income = income_result[0] if income_result else 0
-            
-            # 支出データの取得（カテゴリ別）
-            df = pd.read_sql_query('''
-                SELECT category, SUM(amount) as total_amount 
-                FROM expenses 
-                WHERE strftime('%Y', date) = ? 
-                AND strftime('%m', date) = ?
-                GROUP BY category
-            ''', conn, params=(str(year), f"{month:02d}"))
-            
-            # カテゴリ別支出を辞書に変換
-            expenses_by_category = {}
-            total_expense = 0
-            for _, row in df.iterrows():
-                expenses_by_category[row['category']] = row['total_amount']
-                total_expense += row['total_amount']
-            
-            months_data.append({
-                'year': year,
-                'month': month,
-                'income': income,
-                'total_expense': total_expense,
-                'expenses_by_category': expenses_by_category,
-                'balance': income - total_expense
-            })
-            
-            current_date = current_date.addMonths(1)
-        
-        conn.close()
-        return months_data
-
     def update_display(self):
+        """月次レポート全体を更新する
+
+        以前は「目標なしの旧版」と「目標つきのenhanced版」が併存し、
+        月ナビと目標更新で表示が食い違っていたため、目標つき版に一本化した。
+        """
         # 期間表示の更新
         if hasattr(self, 'period_label'):
             self.period_label.setText(f'{self.display_year}年{self.display_month}月')
-        
+
         # データの取得
         try:
             months_data = self.get_6month_data()
-            
+
             # グラフの更新
             self.update_chart(months_data)
-            
+
             # テーブルの更新
             self.update_table(months_data)
         except Exception as e:
             print(f"Error in update_display: {e}")
 
-
-    def enhanced_update_report_display(self):
-        # 期間表示の更新
-        self.period_label.setText(f'{self.display_year}年{self.display_month}月')
-        
-        # データの取得
-        months_data = self.get_enhanced_6month_data()
-        
-        # グラフの更新
-        self.update_chart(months_data)
-        
-        # テーブルの更新
-        self.update_enhanced_table(months_data)
-
-    # MonthlyReportWidgetクラスに新しいメソッドを追加
-    def get_enhanced_6month_data(self):
+    def get_6month_data(self):
         """目標情報を含む6ヶ月分のデータを取得"""
         conn = sqlite3.connect('budget.db')
         months_data = []
@@ -313,7 +201,8 @@ class MonthlyReportWidget(BaseWidget):
         conn.close()
         return months_data
 
-    def update_enhanced_table(self, months_data):
+    def update_table(self, months_data):
+        """収支リストのテーブルを更新（目標行つき）"""
         # 全期間のカテゴリを取得
         all_categories = set()
         for data in months_data:

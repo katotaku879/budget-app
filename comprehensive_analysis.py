@@ -30,7 +30,7 @@ import sqlite3
 import pandas as pd
 from datetime import datetime
 import json
-from common import BaseWidget
+from common import BaseWidget, CHART_PALETTE
 
 
 class ComprehensiveAnalysisWidget(BaseWidget):
@@ -557,10 +557,8 @@ class ComprehensiveAnalysisWidget(BaseWidget):
         chart = QChart()
         series = QPieSeries()
         
-        colors = [
-            '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEEAD',
-            '#FFD93D', '#6C5B7B', '#F7A072', '#C06C84', '#95A5A6'
-        ]
+        # 全画面共通のカラーパレットを使用
+        colors = CHART_PALETTE
         
         for i, (_, row) in enumerate(category_stats.iterrows()):
             slice = series.append(row['category'], row['sum'])
