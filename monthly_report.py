@@ -211,7 +211,9 @@ class MonthlyReportWidget(BaseWidget):
         
         # テーブルの設定
         self.summary_table.clear()
-        row_count = len(all_categories) + 6  # カテゴリ + 収入行 + 支出合計行 + 収支合計行 + 貯蓄目標行 + 目標達成率行
+        # 行数 = カテゴリ数 + 収入行 + 支出合計行 + 収支合計行 + 貯蓄目標行 + 目標達成率行(計5行)
+        # ※以前は +6 で確保していたため最下部に空行が1行できていた
+        row_count = len(all_categories) + 5
         col_count = len(months_data)
         self.summary_table.setRowCount(row_count)
         self.summary_table.setColumnCount(col_count)

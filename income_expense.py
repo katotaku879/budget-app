@@ -853,12 +853,19 @@ class IncomeExpenseWidget(BaseWidget):
         conn.close()
         return df     
 
-    def show_credit_card_import_dialog(self):
-        """クレジットカード明細取込ダイアログを表示"""
-        dialog = CreditCardImportDialog(self)
+    def _run_import_dialog(self, dialog):
+        """取込ダイアログの共通実行処理
+
+        ダイアログを開き、取込が完了したらテーブルと当月支出を再表示する。
+        各取込メソッド（クレカ/楽天PAY/PayPay/PASMO）から共通で使う。
+        """
         if dialog.exec_() == QDialog.Accepted:
             self.update_table()
             self.update_monthly_expense()
+
+    def show_credit_card_import_dialog(self):
+        """クレジットカード明細取込ダイアログを表示"""
+        self._run_import_dialog(CreditCardImportDialog(self))
 
     def show_rakuten_pay_import_dialog(self):
         """楽天PAY明細取込ダイアログを表示（URL自動取得対応）"""
@@ -918,25 +925,17 @@ class IncomeExpenseWidget(BaseWidget):
                 f'URLからのデータ取得に失敗しました:\n{str(e)}\n\nファイル選択に切り替えます。'
             )
 
-        if dialog.exec_() == QDialog.Accepted:
-            self.update_table()
-            self.update_monthly_expense()
+        self._run_import_dialog(dialog)
 
     def show_paypay_import_dialog(self):
         """PayPay明細取込ダイアログを表示（CSVファイル選択方式）"""
         dialog = CreditCardImportDialog(self)
         dialog.format_combo.setCurrentText('PayPay')
-
-        if dialog.exec_() == QDialog.Accepted:
-            self.update_table()
-            self.update_monthly_expense()
+        self._run_import_dialog(dialog)
 
     def show_pasmo_import_dialog(self):
         """PASMO明細取込ダイアログを表示（PDF取込）"""
-        dialog = PasmoImportDialog(self)
-        if dialog.exec_() == QDialog.Accepted:
-            self.update_table()
-            self.update_monthly_expense()
+        self._run_import_dialog(PasmoImportDialog(self))
 
     def load_categories_for_filter(self):
         """フィルター用のカテゴリを読み込む"""
